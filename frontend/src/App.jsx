@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 import * as THREE from "three";
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
 
 import {
   Activity,
@@ -100,7 +102,7 @@ function App() {
       try {
 
         const response = await axios.get(
-          "http://localhost:5000/api/status"
+          `${API_BASE_URL}/api/status`
         );
 
         const data = response.data;
@@ -3071,7 +3073,7 @@ function AnalysisPage() {
 
         const response =
           await axios.get(
-            "http://localhost:5000/api/history?limit=500"
+            `${API_BASE_URL}/api/history?limit=500`
           );
 
 

@@ -28,7 +28,7 @@ const char* WIFI_SSID = "Suresh 5g";
 const char* WIFI_PASSWORD = "12345679";
 
 // ─── Backend Configuration ───
-const char* BACKEND_URL = "http://10.114.187.230:5000/api/hardware-data";
+#define BACKEND_URL "https://smartfarm-backend-w3x0.onrender.com/api/hardware-data"
 const char* DEVICE_ID = "esp32-001";
 const char* API_KEY = "";
 
