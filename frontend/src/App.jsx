@@ -4381,7 +4381,200 @@ function AnalysisSummary({
     </div>
   );
 }
+// =========================================================
+// ALERTS PAGE
+// =========================================================
 
+function AlertsPage({
+  liveData,
+  backendConnected,
+}) {
+
+  const alerts = [];
+
+  if (!backendConnected) {
+    alerts.push({
+      type: "CRITICAL",
+      title: "Backend Offline",
+      message: "The Python backend is not currently reachable.",
+      time: "Current",
+    });
+  }
+
+  if (
+    liveData?.rain === true
+  ) {
+    alerts.push({
+      type: "WARNING",
+      title: "Rain Detected",
+      message: "Rain sensor is currently detecting wet conditions.",
+      time: liveData?.timestamp || "Current",
+    });
+  }
+
+  if (
+    Number.isFinite(Number(liveData?.soil_moisture_1)) &&
+    Number(liveData.soil_moisture_1) < 30
+  ) {
+    alerts.push({
+      type: "WARNING",
+      title: "Low Soil Moisture",
+      message: "Soil Moisture 01 is below the monitoring threshold.",
+      time: liveData?.timestamp || "Current",
+    });
+  }
+
+  if (alerts.length === 0) {
+    alerts.push({
+      type: "INFO",
+      title: "No Active Alerts",
+      message: "No alert conditions are currently detected.",
+      time: "Current",
+    });
+  }
+
+  const getColor = (type) => {
+
+    if (type === "CRITICAL") {
+      return "#d65f5f";
+    }
+
+    if (type === "WARNING") {
+      return "#d4a84b";
+    }
+
+    return "#62c87b";
+  };
+
+  return (
+    <div className="page-content">
+
+      <section className="section">
+
+        <div className="section-heading">
+
+          <div>
+
+            <div className="section-kicker">
+              SYSTEM EVENTS
+            </div>
+
+            <h2>
+              Alerts & Notifications
+            </h2>
+
+          </div>
+
+        </div>
+
+
+        <div
+          style={{
+            display: "grid",
+            gap: "12px",
+          }}
+        >
+
+          {alerts.map((alert, index) => {
+
+            const color =
+              getColor(alert.type);
+
+            return (
+
+              <div
+                key={`${alert.title}-${index}`}
+                className="panel"
+                style={{
+                  padding: "18px",
+                  borderLeft:
+                    `3px solid ${color}`,
+                }}
+              >
+
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent:
+                      "space-between",
+                    alignItems: "center",
+                    gap: "15px",
+                  }}
+                >
+
+                  <div>
+
+                    <div
+                      style={{
+                        color,
+                        fontFamily:
+                          '"JetBrains Mono", monospace',
+                        fontSize: "10px",
+                        letterSpacing:
+                          "0.12em",
+                      }}
+                    >
+                      {alert.type}
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: "7px",
+                        color: "#e8eee9",
+                        fontSize: "15px",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {alert.title}
+                    </div>
+
+                  </div>
+
+                  <Bell
+                    size={18}
+                    color={color}
+                  />
+
+                </div>
+
+
+                <div
+                  style={{
+                    marginTop: "10px",
+                    color: "#839189",
+                    fontSize: "12px",
+                    lineHeight: "1.6",
+                  }}
+                >
+                  {alert.message}
+                </div>
+
+
+                <div
+                  style={{
+                    marginTop: "10px",
+                    color: "#58665e",
+                    fontFamily:
+                      '"JetBrains Mono", monospace',
+                    fontSize: "9px",
+                  }}
+                >
+                  {alert.time}
+                </div>
+
+              </div>
+
+            );
+
+          })}
+
+        </div>
+
+      </section>
+
+    </div>
+  );
+}
 
 // =========================================================
 // METRIC BOX
