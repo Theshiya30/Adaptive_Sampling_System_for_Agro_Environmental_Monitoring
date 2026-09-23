@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 import * as THREE from "three";
+import UIEnhancements from "./UIEnhancements";
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
 
@@ -268,6 +269,151 @@ function App() {
 
     <div className="app-shell">
 
+      <UIEnhancements />
+
+      <style>{`
+        .field-page {
+          box-sizing: border-box;
+        }
+
+        .field-page > * {
+          min-width: 0;
+          min-height: 0;
+        }
+
+        .field-page .recharts-responsive-container,
+        .field-page .recharts-wrapper,
+        .field-page .recharts-surface {
+          min-width: 0 !important;
+        }
+
+        .large-chart,
+        .chart-host {
+          width: 100% !important;
+          min-width: 0 !important;
+        }
+
+        .large-chart .recharts-responsive-container,
+        .chart-host .recharts-responsive-container {
+          width: 100% !important;
+          height: 100% !important;
+          min-width: 0 !important;
+        }
+
+        /* Analysis charts must never preserve desktop columns on a narrow viewport.
+           The existing chart layouts use inline grid definitions, so this rule
+           intentionally overrides those definitions only on small screens. */
+        .analysis-page {
+          min-width: 0 !important;
+          width: 100% !important;
+          max-width: 100% !important;
+          overflow-x: hidden !important;
+        }
+
+        .analysis-page [style*="grid-template-columns"] {
+          min-width: 0 !important;
+          max-width: 100% !important;
+        }
+
+        .analysis-page .panel,
+        .analysis-page .chart-panel,
+        .analysis-page .large-chart,
+        .analysis-page .chart-host {
+          min-width: 0 !important;
+          max-width: 100% !important;
+          box-sizing: border-box;
+        }
+
+        .analysis-page .recharts-responsive-container,
+        .analysis-page .recharts-wrapper,
+        .analysis-page .recharts-surface {
+          max-width: 100% !important;
+          min-width: 0 !important;
+        }
+
+        @media (max-width: 820px) {
+          .analysis-page [style*="grid-template-columns"] {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
+
+          .analysis-page .recharts-responsive-container {
+            width: 100% !important;
+          }
+        }
+
+        .analysis-overview-grid,
+        .analysis-secondary-grid,
+        .analysis-two-col,
+        .analysis-three-col,
+        .analysis-four-col {
+          width: 100% !important;
+          min-width: 0 !important;
+          box-sizing: border-box !important;
+        }
+
+        .analysis-overview-grid > *,
+        .analysis-secondary-grid > *,
+        .analysis-two-col > *,
+        .analysis-three-col > *,
+        .analysis-four-col > * {
+          min-width: 0 !important;
+          width: 100% !important;
+          box-sizing: border-box !important;
+        }
+
+        @media (max-width: 820px) {
+          .analysis-overview-grid,
+          .analysis-secondary-grid,
+          .analysis-two-col,
+          .analysis-three-col,
+          .analysis-four-col {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
+
+          .analysis-page .chart-panel,
+          .analysis-page .large-chart,
+          .analysis-page .chart-host {
+            width: 100% !important;
+            min-width: 0 !important;
+          }
+        }
+
+        @media (max-width: 1100px) {
+          .field-page {
+            grid-template-columns: minmax(0, 1fr) 280px !important;
+          }
+        }
+
+        @media (max-width: 820px) {
+          .field-page {
+            grid-template-columns: minmax(0, 1fr) !important;
+            grid-template-rows: minmax(460px, 60vh) auto !important;
+            height: auto !important;
+            min-height: 0 !important;
+          }
+
+          .field-page > * {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 600px) {
+          .field-page {
+            grid-template-rows: minmax(380px, 52vh) auto !important;
+            gap: 12px !important;
+          }
+
+          .field-page > div:first-child {
+            min-height: 380px !important;
+          }
+
+          .large-chart,
+          .chart-host {
+            height: 260px !important;
+            min-height: 260px !important;
+          }
+        }
+      `}</style>
 
       {/* =================================================
           SIDEBAR
@@ -1511,12 +1657,10 @@ function FieldPage({
   return (
 
     <div
+      className="field-page"
       style={{
-        height:
-          "calc(100vh - 110px)",
-
         minHeight:
-          "650px",
+          "calc(100vh - 110px)",
 
         position:
           "relative",
@@ -1525,10 +1669,22 @@ function FieldPage({
           "grid",
 
         gridTemplateColumns:
-          "minmax(0, 1fr) 320px",
+          "minmax(0, 1fr) minmax(280px, 320px)",
+
+        gridTemplateRows:
+          "minmax(560px, 1fr)",
+
+        alignItems:
+          "stretch",
 
         gap:
           "18px",
+
+        width:
+          "100%",
+
+        minWidth:
+          0,
       }}
     >
 
@@ -1553,6 +1709,15 @@ function FieldPage({
 
           background:
             "radial-gradient(circle at 50% 35%, rgba(31,55,43,0.42), rgba(7,14,11,0.96) 70%)",
+
+          minWidth:
+            0,
+
+          minHeight:
+            0,
+
+          height:
+            "100%",
         }}
       >
 
@@ -1673,6 +1838,11 @@ function FieldPage({
 
 
         <Canvas
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "block",
+          }}
           camera={{
             position:
               [7, 6, 9],
@@ -3077,18 +3247,14 @@ function AnalysisPage() {
           );
 
 
-        if (
-          response.data &&
-          Array.isArray(
-            response.data.records
-          )
-        ) {
+        const records =
+          Array.isArray(response.data?.records)
+            ? response.data.records
+            : Array.isArray(response.data?.history)
+              ? response.data.history
+              : [];
 
-          setHistoryData(
-            response.data.records
-          );
-
-        }
+        setHistoryData(records);
 
       } catch (error) {
 
@@ -3280,7 +3446,7 @@ function AnalysisPage() {
 
   return (
 
-    <div className="page-content">
+    <div className="page-content analysis-page">
 
 
       {/* =================================================
@@ -3551,6 +3717,7 @@ function AnalysisPage() {
 
 
             <div
+              className="analysis-overview-grid"
               style={{
                 display:
                   "grid",
@@ -3597,6 +3764,7 @@ function AnalysisPage() {
 
 
             <div
+              className="analysis-secondary-grid"
               style={{
                 display:
                   "grid",
@@ -3747,6 +3915,7 @@ function AnalysisPage() {
 
 
             <div
+              className="analysis-two-col"
               style={{
                 display:
                   "grid",
@@ -4011,6 +4180,7 @@ function AnalysisPage() {
 
 
             <div
+              className="analysis-three-col"
               style={{
                 display:
                   "grid",
@@ -4260,6 +4430,7 @@ function AnalysisPage() {
 
 
             <div
+              className="analysis-three-col"
               style={{
                 display:
                   "grid",
@@ -4737,18 +4908,32 @@ function LargeChart({
   return (
 
     <div
+      className="large-chart"
       style={{
         width:
           "100%",
 
         height:
           "300px",
+
+        minWidth:
+          0,
+
+        minHeight:
+          "300px",
+
+        position:
+          "relative",
+        overflow:
+          "hidden",
       }}
     >
 
       <ResponsiveContainer
         width="100%"
-        height="100%"
+        height={300}
+        minWidth={1}
+        minHeight={300}
       >
 
         {children}
@@ -4771,15 +4956,23 @@ function TemperatureChart({
   return (
 
     <div
+      className="chart-host"
       style={{
+        width: "100%",
         height:
           "300px",
+        minWidth: 0,
+        minHeight: "300px",
+        position: "relative",
+        overflow: "hidden",
       }}
     >
 
       <ResponsiveContainer
         width="100%"
-        height="100%"
+        height={300}
+        minWidth={1}
+        minHeight={300}
       >
 
         <LineChart
@@ -4856,15 +5049,23 @@ function SoilChart({
   return (
 
     <div
+      className="chart-host"
       style={{
+        width: "100%",
         height:
           "300px",
+        minWidth: 0,
+        minHeight: "300px",
+        position: "relative",
+        overflow: "hidden",
       }}
     >
 
       <ResponsiveContainer
         width="100%"
-        height="100%"
+        height={300}
+        minWidth={1}
+        minHeight={300}
       >
 
         <LineChart
@@ -4951,15 +5152,23 @@ function EnvironmentChart({
   return (
 
     <div
+      className="chart-host"
       style={{
+        width: "100%",
         height:
           "300px",
+        minWidth: 0,
+        minHeight: "300px",
+        position: "relative",
+        overflow: "hidden",
       }}
     >
 
       <ResponsiveContainer
         width="100%"
-        height="100%"
+        height={300}
+        minWidth={1}
+        minHeight={300}
       >
 
         <LineChart
@@ -5038,15 +5247,23 @@ function PowerChart({
   return (
 
     <div
+      className="chart-host"
       style={{
+        width: "100%",
         height:
           "300px",
+        minWidth: 0,
+        minHeight: "300px",
+        position: "relative",
+        overflow: "hidden",
       }}
     >
 
       <ResponsiveContainer
         width="100%"
-        height="100%"
+        height={300}
+        minWidth={1}
+        minHeight={300}
       >
 
         <LineChart
