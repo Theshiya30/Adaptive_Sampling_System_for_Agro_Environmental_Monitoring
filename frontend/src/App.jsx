@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import axios from "axios";
 import * as THREE from "three";
 import UIEnhancements from "./UIEnhancements";
@@ -4898,6 +4898,39 @@ function ChartPanel({
 
 
 // =========================================================
+// MEASURED CHART WIDTH
+// =========================================================
+
+function useChartWidth() {
+
+  const ref = useRef(null);
+
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+
+    const element = ref.current;
+
+    if (!element) return;
+
+    const update = () => {
+      setWidth(Math.max(1, Math.floor(element.getBoundingClientRect().width)));
+    };
+
+    update();
+
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+
+    return () => observer.disconnect();
+
+  }, []);
+
+  return [ref, width];
+}
+
+
+// =========================================================
 // LARGE CHART
 // =========================================================
 
@@ -4953,9 +4986,12 @@ function TemperatureChart({
   data,
 }) {
 
+
+  const [chartRef, chartWidth] = useChartWidth();
   return (
 
     <div
+      ref={chartRef}
       className="chart-host"
       style={{
         width: "100%",
@@ -4968,17 +5004,11 @@ function TemperatureChart({
       }}
     >
 
-      <ResponsiveContainer
-        width="100%"
-        height={300}
-        minWidth={1}
-        minHeight={300}
-      >
-
+      {chartWidth > 0 && (
         <LineChart
-          data={
-            data
-          }
+          width={chartWidth}
+          height={300}
+          data={data}
         >
 
           <CartesianGrid
@@ -5030,8 +5060,7 @@ function TemperatureChart({
           />
 
         </LineChart>
-
-      </ResponsiveContainer>
+      )}
 
     </div>
   );
@@ -5046,9 +5075,12 @@ function SoilChart({
   data,
 }) {
 
+
+  const [chartRef, chartWidth] = useChartWidth();
   return (
 
     <div
+      ref={chartRef}
       className="chart-host"
       style={{
         width: "100%",
@@ -5061,17 +5093,11 @@ function SoilChart({
       }}
     >
 
-      <ResponsiveContainer
-        width="100%"
-        height={300}
-        minWidth={1}
-        minHeight={300}
-      >
-
+      {chartWidth > 0 && (
         <LineChart
-          data={
-            data
-          }
+          width={chartWidth}
+          height={300}
+          data={data}
         >
 
           <CartesianGrid
@@ -5133,8 +5159,7 @@ function SoilChart({
           />
 
         </LineChart>
-
-      </ResponsiveContainer>
+      )}
 
     </div>
   );
@@ -5149,9 +5174,12 @@ function EnvironmentChart({
   data,
 }) {
 
+
+  const [chartRef, chartWidth] = useChartWidth();
   return (
 
     <div
+      ref={chartRef}
       className="chart-host"
       style={{
         width: "100%",
@@ -5164,17 +5192,11 @@ function EnvironmentChart({
       }}
     >
 
-      <ResponsiveContainer
-        width="100%"
-        height={300}
-        minWidth={1}
-        minHeight={300}
-      >
-
+      {chartWidth > 0 && (
         <LineChart
-          data={
-            data
-          }
+          width={chartWidth}
+          height={300}
+          data={data}
         >
 
           <CartesianGrid
@@ -5228,8 +5250,7 @@ function EnvironmentChart({
           />
 
         </LineChart>
-
-      </ResponsiveContainer>
+      )}
 
     </div>
   );
@@ -5244,9 +5265,12 @@ function PowerChart({
   data,
 }) {
 
+
+  const [chartRef, chartWidth] = useChartWidth();
   return (
 
     <div
+      ref={chartRef}
       className="chart-host"
       style={{
         width: "100%",
@@ -5259,17 +5283,11 @@ function PowerChart({
       }}
     >
 
-      <ResponsiveContainer
-        width="100%"
-        height={300}
-        minWidth={1}
-        minHeight={300}
-      >
-
+      {chartWidth > 0 && (
         <LineChart
-          data={
-            data
-          }
+          width={chartWidth}
+          height={300}
+          data={data}
         >
 
           <CartesianGrid
@@ -5310,8 +5328,7 @@ function PowerChart({
           />
 
         </LineChart>
-
-      </ResponsiveContainer>
+      )}
 
     </div>
   );
