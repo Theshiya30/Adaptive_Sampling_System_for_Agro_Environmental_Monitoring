@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, cloneElement } from "react";
 import axios from "axios";
 import * as THREE from "three";
 import UIEnhancements from "./UIEnhancements";
@@ -4938,40 +4938,28 @@ function LargeChart({
   children,
 }) {
 
+  const [chartRef, chartWidth] = useChartWidth();
+
   return (
 
     <div
+      ref={chartRef}
       className="large-chart"
       style={{
-        width:
-          "100%",
-
-        height:
-          "300px",
-
-        minWidth:
-          0,
-
-        minHeight:
-          "300px",
-
-        position:
-          "relative",
-        overflow:
-          "hidden",
+        width: "100%",
+        height: "300px",
+        minWidth: 0,
+        minHeight: "300px",
+        position: "relative",
+        overflow: "hidden",
       }}
     >
 
-      <ResponsiveContainer
-        width="100%"
-        height={300}
-        minWidth={1}
-        minHeight={300}
-      >
-
-        {children}
-
-      </ResponsiveContainer>
+      {chartWidth > 0 &&
+        cloneElement(children, {
+          width: chartWidth,
+          height: 300,
+        })}
 
     </div>
   );
