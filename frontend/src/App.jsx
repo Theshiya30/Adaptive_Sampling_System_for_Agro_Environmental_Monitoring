@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import axios from "axios";
 import * as THREE from "three";
 import UIEnhancements from "./UIEnhancements";
@@ -28,10 +28,35 @@ import {
     Zap,
     Cpu,
     Battery,
+    Phone,
+    PhoneCall,
+    MessageSquare,
+    Volume2,
+    VolumeX,
+    Volume1,
+    ExternalLink,
+    Printer,
+    Eye,
 } from "lucide-react";
 
 import { getRealtimeAlerts } from "./alertEngine";
 import { generatePdfReport } from "./reportGenerator";
+import {
+    playAlertSound,
+    speakAlertVoice,
+    stopSpeaking,
+    getFarmerContact,
+    saveFarmerContact,
+    isSoundEnabled,
+    setSoundEnabled,
+    isVoiceEnabled,
+    setVoiceEnabled,
+    getDialLink,
+    getWhatsAppLink,
+    getSmsLink,
+    requestNotificationPermission,
+    sendDesktopNotification,
+} from "./alertNotificationService";
 
 import {
     ResponsiveContainer,
@@ -105,6 +130,37 @@ function App() {
 
     const [isPdfModalOpen, setIsPdfModalOpen] =
         useState(false);
+
+    const [soundEnabled, setSoundEnabledState] = useState(() => isSoundEnabled());
+    const [voiceEnabled, setVoiceEnabledState] = useState(() => isVoiceEnabled());
+    const [farmerContact, setFarmerContactState] = useState(() => getFarmerContact());
+    const [activeToastAlert, setActiveToastAlert] = useState(null);
+    const lastAlertKeyRef = useRef("");
+
+    const handleToggleSound = () => {
+        const next = !soundEnabled;
+        setSoundEnabledState(next);
+        setSoundEnabled(next);
+        if (next) playAlertSound("INFO");
+    };
+
+    const handleToggleVoice = () => {
+        const next = !voiceEnabled;
+        setVoiceEnabledState(next);
+        setVoiceEnabled(next);
+        if (next) {
+            speakAlertVoice({
+                severity: "INFO",
+                title: "Voice Alert System Active",
+                reason: "Spoken telemetry notifications are operational",
+            }, farmerContact.name);
+        }
+    };
+
+    const handleUpdateFarmer = (updated) => {
+        setFarmerContactState(updated);
+        saveFarmerContact(updated);
+    };
 
     const [theme, setTheme] = useState(() => {
         return localStorage.getItem("smartfarm_theme") || "dark";
@@ -354,6 +410,26 @@ function App() {
     const activeAlertsCount = realAlerts.filter(
         (a) => a.severity === "CRITICAL" || a.severity === "WARNING"
     ).length;
+
+    // Automatic Urgent Alert Audio & Notification Trigger
+    useEffect(() => {
+        requestNotificationPermission();
+        const urgent = realAlerts.find((a) => a.severity === "CRITICAL" || a.severity === "WARNING");
+        if (urgent) {
+            const key = `${urgent.title}_${urgent.severity}_${urgent.reason}`;
+            if (key !== lastAlertKeyRef.current) {
+                lastAlertKeyRef.current = key;
+                setActiveToastAlert(urgent);
+                if (soundEnabled) {
+                    playAlertSound(urgent.severity);
+                }
+                if (voiceEnabled && urgent.severity === "CRITICAL") {
+                    speakAlertVoice(urgent, farmerContact.name);
+                }
+                sendDesktopNotification(urgent);
+            }
+        }
+    }, [realAlerts, soundEnabled, voiceEnabled, farmerContact]);
 
 
     return (
@@ -738,6 +814,12 @@ function App() {
                         historyData={historyData}
                         alerts={realAlerts}
                         onOpenPdfModal={() => setIsPdfModalOpen(true)}
+                        farmerContact={farmerContact}
+                        soundEnabled={soundEnabled}
+                        voiceEnabled={voiceEnabled}
+                        onToggleSound={handleToggleSound}
+                        onToggleVoice={handleToggleVoice}
+                        onUpdateFarmer={handleUpdateFarmer}
                     />
                 )}
 
@@ -749,6 +831,12 @@ function App() {
                 liveData={liveData}
                 historyData={historyData}
                 alerts={realAlerts}
+            />
+
+            <AlertPopupToast
+                alert={activeToastAlert}
+                farmerContact={farmerContact}
+                onDismiss={() => setActiveToastAlert(null)}
             />
 
         </div>
@@ -4720,6 +4808,64 @@ function AnalysisSummary({
     );
 }
 // =========================================================
+// ALERT POPUP TOAST NOTIFICATION (HIGH ATTENTION)
+// =========================================================
+
+function AlertPopupToast({ alert, farmerContact, onDismiss }) {
+    if (!alert) return null;
+    const isCritical = alert.severity === "CRITICAL";
+
+    return (
+        <div className={`alert-popup-toast ${isCritical ? "critical" : "warning"}`} role="alert">
+            <div className="toast-header">
+                <div className={`toast-badge ${isCritical ? "critical" : "warning"}`}>
+                    <AlertTriangle size={13} />
+                    <span>{isCritical ? "CRITICAL ALERT" : "WARNING ALERT"}</span>
+                </div>
+                <button className="toast-btn-dismiss" onClick={onDismiss} aria-label="Dismiss alert">
+                    <X size={15} />
+                </button>
+            </div>
+
+            <div className="toast-title">{alert.title}</div>
+            <div className="toast-reason">{alert.reason}</div>
+
+            <div className="toast-actions">
+                <button
+                    type="button"
+                    className="toast-btn toast-btn-speak"
+                    onClick={() => speakAlertVoice(alert, farmerContact?.name)}
+                    title="Speak alert with voice audio"
+                >
+                    <Volume2 size={13} />
+                    <span>Speak Alert</span>
+                </button>
+
+                <a
+                    href={getDialLink(farmerContact?.phone)}
+                    className="toast-btn toast-btn-dial"
+                    title={`Call farmer at ${farmerContact?.phone || "+94771234567"}`}
+                >
+                    <PhoneCall size={13} />
+                    <span>Dial Farmer</span>
+                </a>
+
+                <a
+                    href={getWhatsAppLink(alert, farmerContact?.phone)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="toast-btn toast-btn-wa"
+                    title="Open WhatsApp with pre-filled alert text"
+                >
+                    <MessageSquare size={13} />
+                    <span>WhatsApp</span>
+                </a>
+            </div>
+        </div>
+    );
+}
+
+// =========================================================
 // PDF REPORT GENERATION MODAL
 // =========================================================
 
@@ -4738,11 +4884,11 @@ function PdfReportModal({
 
     if (!isOpen) return null;
 
-    const handleDownload = async () => {
+    const handleGenerate = (action = "download") => {
         setIsGenerating(true);
         setDownloadSuccess("");
         try {
-            const filename = generatePdfReport({
+            const report = generatePdfReport({
                 liveData,
                 historyData,
                 alerts,
@@ -4751,11 +4897,21 @@ function PdfReportModal({
                     ? { from: customFrom, to: customTo }
                     : null,
             });
-            setDownloadSuccess(`Successfully exported: ${filename}`);
+
+            if (action === "open") {
+                report.openInBrowser();
+                setDownloadSuccess(`Opened PDF in browser tab (${report.sizeKb} KB)`);
+            } else if (action === "print") {
+                report.print();
+                setDownloadSuccess("Triggered system print dialog");
+            } else {
+                report.download();
+                setDownloadSuccess(`Downloaded ${report.filename} (${report.sizeKb} KB)`);
+            }
+
             setTimeout(() => {
                 setDownloadSuccess("");
-                onClose();
-            }, 1400);
+            }, 3500);
         } catch (error) {
             console.error("PDF generation failed:", error);
             alert("Could not generate PDF report: " + error.message);
@@ -4842,7 +4998,7 @@ function PdfReportModal({
                         lineHeight: "1.5",
                     }}
                 >
-                    ✓ <strong>Included in report:</strong> Dual Soil Moisture probes (S1/S2/Avg), DHT22 Temp & Humidity, BH1750 Light, Rain detection, INA219 Battery & Power, SSI / MSI / FSI stability metrics, {alerts.length} verified real-time events, and 2 scalable vector charts.
+                    ✓ <strong>Readable anywhere:</strong> You can open the PDF directly in a new browser tab with your browser&apos;s built-in reader, or download the clean binary PDF for Windows, Adobe Acrobat, and mobile.
                 </div>
 
                 {downloadSuccess && (
@@ -4851,13 +5007,29 @@ function PdfReportModal({
                     </div>
                 )}
 
-                <div className="modal-actions">
+                <div className="modal-actions" style={{ flexWrap: "wrap", gap: "8px" }}>
                     <button className="modal-btn-secondary" onClick={onClose} disabled={isGenerating}>
                         Cancel
                     </button>
-                    <button className="modal-btn-primary" onClick={handleDownload} disabled={isGenerating}>
+                    <button
+                        type="button"
+                        className="modal-btn-primary pdf-btn-browser"
+                        onClick={() => handleGenerate("open")}
+                        disabled={isGenerating}
+                        title="Open directly in a new browser tab with browser's built-in PDF viewer"
+                    >
+                        <Eye size={14} />
+                        <span>Open & Read in Browser</span>
+                    </button>
+                    <button
+                        type="button"
+                        className="modal-btn-primary"
+                        onClick={() => handleGenerate("download")}
+                        disabled={isGenerating}
+                        title="Download clean binary PDF file for Windows, Adobe Acrobat, and mobile"
+                    >
                         <FileDown size={14} />
-                        <span>{isGenerating ? "Compiling Report..." : "Download PDF Report"}</span>
+                        <span>{isGenerating ? "Compiling..." : "Download PDF File"}</span>
                     </button>
                 </div>
             </div>
@@ -4876,8 +5048,23 @@ function AlertsPage({
     historyData = [],
     alerts: propAlerts,
     onOpenPdfModal,
+    farmerContact,
+    soundEnabled,
+    voiceEnabled,
+    onToggleSound,
+    onToggleVoice,
+    onUpdateFarmer,
 }) {
     const [selectedFilter, setSelectedFilter] = useState("ALL");
+    const [isEditingContact, setIsEditingContact] = useState(false);
+    const [nameInput, setNameInput] = useState(farmerContact?.name || "Farm Manager Silva");
+    const [phoneInput, setPhoneInput] = useState(farmerContact?.phone || "+94771234567");
+
+    const handleSaveContact = (e) => {
+        e?.preventDefault();
+        onUpdateFarmer?.({ name: nameInput, phone: phoneInput });
+        setIsEditingContact(false);
+    };
 
     // Use passed alerts or compute dynamically
     const alerts = propAlerts || getRealtimeAlerts({
@@ -4961,6 +5148,106 @@ function AlertsPage({
                             <span>Export Alerts PDF</span>
                         </button>
                     )}
+                </div>
+
+                {/* FARMER HOTLINE & AUDIO ALERT CONTROLS */}
+                <div className="farmer-hotline-card">
+                    <div className="hotline-farmer-info">
+                        <div className="hotline-avatar">
+                            <PhoneCall size={22} />
+                        </div>
+                        <div>
+                            <div style={{ fontSize: "10.5px", fontFamily: '"JetBrains Mono", monospace', color: "#62c87b", fontWeight: 700, letterSpacing: "0.06em" }}>
+                                FARMER EMERGENCY DISPATCH HOTLINE
+                            </div>
+                            {!isEditingContact ? (
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "2px" }}>
+                                    <span style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-primary, #e8eee9)" }}>
+                                        {farmerContact?.name || "Farm Manager Silva"} ({farmerContact?.phone || "+94 77 123 4567"})
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsEditingContact(true)}
+                                        style={{ background: "transparent", border: "0", color: "#62c87b", cursor: "pointer", fontSize: "11px", textDecoration: "underline", padding: "0 4px" }}
+                                    >
+                                        Edit
+                                    </button>
+                                </div>
+                            ) : (
+                                <form onSubmit={handleSaveContact} style={{ display: "flex", gap: "6px", alignItems: "center", marginTop: "4px", flexWrap: "wrap" }}>
+                                    <input
+                                        type="text"
+                                        value={nameInput}
+                                        onChange={(e) => setNameInput(e.target.value)}
+                                        placeholder="Farmer Name"
+                                        style={{ padding: "4px 8px", borderRadius: "5px", border: "1px solid #3d5444", background: "rgba(0,0,0,0.3)", color: "#e8eee9", fontSize: "11px", fontFamily: '"JetBrains Mono", monospace' }}
+                                    />
+                                    <input
+                                        type="text"
+                                        value={phoneInput}
+                                        onChange={(e) => setPhoneInput(e.target.value)}
+                                        placeholder="Phone Number (+94...)"
+                                        style={{ padding: "4px 8px", borderRadius: "5px", border: "1px solid #3d5444", background: "rgba(0,0,0,0.3)", color: "#e8eee9", fontSize: "11px", fontFamily: '"JetBrains Mono", monospace' }}
+                                    />
+                                    <button type="submit" className="toast-btn toast-btn-dial" style={{ padding: "4px 9px", fontSize: "10px" }}>Save</button>
+                                    <button type="button" onClick={() => setIsEditingContact(false)} className="modal-btn-secondary" style={{ padding: "4px 8px", fontSize: "10px" }}>Cancel</button>
+                                </form>
+                            )}
+                            <div style={{ fontSize: "11px", color: "var(--text-secondary, #7b8f83)", marginTop: "2px" }}>
+                                Automated audio alarm, spoken voice alerts, and 1-click WhatsApp / direct phone dial
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="hotline-controls">
+                        <a
+                            href={getDialLink(farmerContact?.phone)}
+                            className="toast-btn toast-btn-dial"
+                            style={{ padding: "8px 14px", fontSize: "11px" }}
+                            title={`Call farmer directly at ${farmerContact?.phone || "+94771234567"}`}
+                        >
+                            <Phone size={13} />
+                            <span>Dial Farmer</span>
+                        </a>
+
+                        <button
+                            type="button"
+                            className={`hotline-toggle-btn ${soundEnabled ? "active" : ""}`}
+                            onClick={onToggleSound}
+                            title={soundEnabled ? "Sound alarms are active" : "Sound alarms are muted"}
+                        >
+                            {soundEnabled ? <Volume2 size={13} /> : <VolumeX size={13} />}
+                            <span>Sound {soundEnabled ? "ON" : "MUTED"}</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            className={`hotline-toggle-btn ${voiceEnabled ? "active" : ""}`}
+                            onClick={onToggleVoice}
+                            title={voiceEnabled ? "Spoken voice alert active" : "Spoken voice alert disabled"}
+                        >
+                            <Volume1 size={13} />
+                            <span>Voice Alert {voiceEnabled ? "ON" : "OFF"}</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            className="hotline-toggle-btn"
+                            onClick={() => {
+                                playAlertSound("CRITICAL");
+                                speakAlertVoice({
+                                    severity: "CRITICAL",
+                                    title: "Emergency Audio Alarm Test",
+                                    reason: "Testing speaker tone and personalized voice alert dispatch",
+                                    recommendation: "System audio and voice alert verified successfully",
+                                }, farmerContact?.name);
+                            }}
+                            title="Play test alarm siren and spoken alert voice"
+                        >
+                            <Bell size={13} />
+                            <span>Test Siren & Voice</span>
+                        </button>
+                    </div>
                 </div>
 
                 {/* STATS OVERVIEW CARDS */}
@@ -5211,6 +5498,47 @@ function AlertsPage({
                                 >
                                     <span>Timestamp: {alert.timestamp}</span>
                                     <span>Status: {alert.status || "ACTIVE"}</span>
+                                </div>
+
+                                <div className="alert-action-toolbar">
+                                    <span style={{ fontSize: "9.5px", color: "#6e8074", fontFamily: '"JetBrains Mono", monospace', marginRight: "4px" }}>
+                                        Hotline Dispatch:
+                                    </span>
+                                    <a
+                                        href={getDialLink(farmerContact?.phone)}
+                                        className="alert-act-btn alert-act-dial"
+                                        title={`Call farmer at ${farmerContact?.phone || "+94771234567"}`}
+                                    >
+                                        <Phone size={11} />
+                                        <span>Dial Farmer</span>
+                                    </a>
+                                    <a
+                                        href={getWhatsAppLink(alert, farmerContact?.phone)}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="alert-act-btn alert-act-wa"
+                                        title="Send personalized alert via WhatsApp"
+                                    >
+                                        <MessageSquare size={11} />
+                                        <span>WhatsApp Alert</span>
+                                    </a>
+                                    <a
+                                        href={getSmsLink(alert, farmerContact?.phone)}
+                                        className="alert-act-btn alert-act-sms"
+                                        title="Send SMS alert"
+                                    >
+                                        <MessageSquare size={11} />
+                                        <span>SMS Alert</span>
+                                    </a>
+                                    <button
+                                        type="button"
+                                        className="alert-act-btn alert-act-speak"
+                                        onClick={() => speakAlertVoice(alert, farmerContact?.name)}
+                                        title="Speak alert audio with voice"
+                                    >
+                                        <Volume2 size={11} />
+                                        <span>Speak Alert</span>
+                                    </button>
                                 </div>
                             </div>
                         );

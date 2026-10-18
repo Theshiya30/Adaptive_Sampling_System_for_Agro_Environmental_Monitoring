@@ -1663,3 +1663,346 @@ button {
 [data-theme="light"] .modal-btn-primary:hover {
   background: #167738;
 }
+
+/* =====================================================
+   ALERT POPUP TOAST (HIGH ATTENTION)
+===================================================== */
+.alert-popup-toast {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 9999;
+  width: 90%;
+  max-width: 440px;
+  background: rgba(18, 26, 20, 0.94);
+  backdrop-filter: blur(12px);
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 25px rgba(220, 60, 60, 0.25);
+  animation: toastSlideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  border-left: 5px solid #e85555;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.alert-popup-toast.warning {
+  border-left-color: #e0b65a;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 25px rgba(224, 182, 90, 0.25);
+}
+
+@keyframes toastSlideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+[data-theme="light"] .alert-popup-toast {
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.15);
+  border-top-color: #e2ebe4;
+  border-right-color: #e2ebe4;
+  border-bottom-color: #e2ebe4;
+}
+
+.toast-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.toast-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.toast-badge.critical {
+  background: rgba(232, 85, 85, 0.18);
+  color: #ff7575;
+}
+
+.toast-badge.warning {
+  background: rgba(224, 182, 90, 0.18);
+  color: #f3c969;
+}
+
+.toast-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #e8eee9;
+  margin-bottom: 4px;
+}
+
+[data-theme="light"] .toast-title {
+  color: #1a271e;
+}
+
+.toast-reason {
+  font-size: 12px;
+  color: #92a498;
+  line-height: 1.45;
+  margin-bottom: 12px;
+}
+
+[data-theme="light"] .toast-reason {
+  color: #4a5c51;
+}
+
+.toast-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.toast-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 11px;
+  border-radius: 6px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+}
+
+.toast-btn-dial {
+  background: #1b4b2c;
+  color: #ffffff;
+  border-color: #357348;
+}
+
+.toast-btn-dial:hover {
+  background: #235f38;
+}
+
+.toast-btn-wa {
+  background: #128c7e;
+  color: #ffffff;
+}
+
+.toast-btn-wa:hover {
+  background: #0f796c;
+}
+
+.toast-btn-speak {
+  background: rgba(255, 255, 255, 0.08);
+  color: #9ee6b1;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.toast-btn-speak:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+[data-theme="light"] .toast-btn-speak {
+  background: #eef5f0;
+  color: #1c7c3d;
+  border-color: #c9dbcf;
+}
+
+.toast-btn-dismiss {
+  background: transparent;
+  color: #798b80;
+  padding: 4px;
+  border: 0;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+}
+
+.toast-btn-dismiss:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* =====================================================
+   FARMER DISPATCH HOTLINE PANEL
+===================================================== */
+.farmer-hotline-card {
+  background: linear-gradient(135deg, rgba(22, 36, 26, 0.95), rgba(16, 24, 18, 0.95));
+  border: 1px solid #2d4533;
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+[data-theme="light"] .farmer-hotline-card {
+  background: linear-gradient(135deg, #f0f7f2, #e8f3ec);
+  border-color: #c5dcce;
+}
+
+.hotline-farmer-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.hotline-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(98, 200, 123, 0.15);
+  border: 1px solid rgba(98, 200, 123, 0.35);
+  display: grid;
+  place-items: center;
+  color: #62c87b;
+}
+
+.hotline-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.hotline-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #92a498;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.hotline-toggle-btn.active {
+  background: rgba(98, 200, 123, 0.14);
+  border-color: #4da863;
+  color: #7de097;
+}
+
+[data-theme="light"] .hotline-toggle-btn {
+  background: #ffffff;
+  border-color: #d2ded6;
+  color: #4a5c51;
+}
+
+[data-theme="light"] .hotline-toggle-btn.active {
+  background: #e4f5ea;
+  border-color: #27944e;
+  color: #177339;
+}
+
+.alert-action-toolbar {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+[data-theme="light"] .alert-action-toolbar {
+  border-top-color: #e5ece7;
+}
+
+.alert-act-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9.5px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.alert-act-dial {
+  background: rgba(30, 142, 69, 0.18);
+  border-color: rgba(30, 142, 69, 0.4);
+  color: #7de097;
+}
+
+.alert-act-dial:hover {
+  background: #1e8e45;
+  color: #ffffff;
+}
+
+.alert-act-wa {
+  background: rgba(18, 140, 126, 0.18);
+  border-color: rgba(18, 140, 126, 0.4);
+  color: #4cd4c3;
+}
+
+.alert-act-wa:hover {
+  background: #128c7e;
+  color: #ffffff;
+}
+
+.alert-act-sms {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #8fa094;
+}
+
+.alert-act-sms:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #e8eee9;
+}
+
+.alert-act-speak {
+  background: rgba(212, 168, 75, 0.12);
+  border-color: rgba(212, 168, 75, 0.35);
+  color: #e6be65;
+}
+
+.alert-act-speak:hover {
+  background: #d4a84b;
+  color: #1a160d;
+}
+
+[data-theme="light"] .alert-act-sms {
+  background: #edf3ee;
+  border-color: #cfdcd2;
+  color: #3b4d42;
+}
+
+[data-theme="light"] .alert-act-sms:hover {
+  background: #e1ede4;
+  color: #16241b;
+}
+
+.pdf-btn-browser {
+  background: #2563eb !important;
+  border-color: #3b82f6 !important;
+  color: #ffffff !important;
+}
+
+.pdf-btn-browser:hover {
+  background: #1d4ed8 !important;
+}

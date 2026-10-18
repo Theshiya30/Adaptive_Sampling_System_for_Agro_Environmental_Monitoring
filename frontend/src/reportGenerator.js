@@ -503,13 +503,54 @@ export function generatePdfReport({
   }
 
   // -------------------------------------------------------------
-  // Save / Trigger Download
+  // Generate Clean Binary PDF Blob (Readable by all Browsers and Windows apps)
   // -------------------------------------------------------------
   const dateStr = now.toISOString().slice(0, 10);
   const timeStr = `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
   const filename = `SmartFarm_Report_${dateStr}_${timeStr}.pdf`;
-  doc.save(filename);
-  return filename;
+
+  // Output as arraybuffer and create a clean, standard application/pdf Blob
+  const arrayBuffer = doc.output("arraybuffer");
+  const blob = new Blob([arrayBuffer], { type: "application/pdf" });
+  const blobUrl = URL.createObjectURL(blob);
+  const sizeKb = (blob.size / 1024).toFixed(1);
+
+  const download = () => {
+    const a = document.createElement("a");
+    a.style.display = "none";
+    a.href = blobUrl;
+    a.download = filename;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      try {
+        document.body.removeChild(a);
+      } catch {}
+    }, 1500);
+  };
+
+  const openInBrowser = () => {
+    window.open(blobUrl, "_blank");
+  };
+
+  const print = () => {
+    const printWin = window.open(blobUrl, "_blank");
+    if (printWin) {
+      printWin.focus();
+    }
+  };
+
+  return {
+    filename,
+    blob,
+    blobUrl,
+    totalPages,
+    sizeKb,
+    download,
+    openInBrowser,
+    print,
+  };
 }
 
 /**
