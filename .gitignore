@@ -6,3 +6,7 @@ frontend/node_modules/
 app_hardware_integrated_v2.py
 templates/dashboard.html
 esp32/old_smartfarm_esp32.ino
+*_backup*
+*backup*
+__pycache__/
+*.py[cod]

@@ -17,12 +17,21 @@ import {
     Radio,
     Settings,
     Sun,
+    Moon,
+    FileDown,
+    AlertTriangle,
+    ShieldCheck,
+    Check,
+    X,
     Thermometer,
     Wifi,
     Zap,
     Cpu,
     Battery,
 } from "lucide-react";
+
+import { getRealtimeAlerts } from "./alertEngine";
+import { generatePdfReport } from "./reportGenerator";
 
 import {
     ResponsiveContainer,
@@ -90,6 +99,47 @@ function App() {
 
     const [backendConnected, setBackendConnected] =
         useState(false);
+
+    const [historyData, setHistoryData] =
+        useState([]);
+
+    const [isPdfModalOpen, setIsPdfModalOpen] =
+        useState(false);
+
+    const [theme, setTheme] = useState(() => {
+        return localStorage.getItem("smartfarm_theme") || "dark";
+    });
+
+    useEffect(() => {
+        document.documentElement.setAttribute("data-theme", theme);
+        localStorage.setItem("smartfarm_theme", theme);
+    }, [theme]);
+
+    const toggleTheme = () => {
+        setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+    };
+
+    useEffect(() => {
+        const fetchHistory = async () => {
+            try {
+                const response = await axios.get(
+                    `${API_BASE_URL}/api/history?limit=500`
+                );
+                const records = Array.isArray(response.data?.records)
+                    ? response.data.records
+                    : Array.isArray(response.data?.history)
+                        ? response.data.history
+                        : [];
+                setHistoryData(records);
+            } catch (error) {
+                // Non-blocking background history fetch
+            }
+        };
+
+        fetchHistory();
+        const interval = setInterval(fetchHistory, 5000);
+        return () => clearInterval(interval);
+    }, []);
 
 
     // =======================================================
@@ -284,6 +334,17 @@ function App() {
 
     const sensorHealth = getSensorHealth();
 
+    const realAlerts = getRealtimeAlerts({
+        liveData,
+        backendConnected,
+        sensorHealth,
+        history: historyData,
+    });
+
+    const activeAlertsCount = realAlerts.filter(
+        (a) => a.severity === "CRITICAL" || a.severity === "WARNING"
+    ).length;
+
 
     return (
 
@@ -449,6 +510,12 @@ function App() {
                                     {item.label}
                                 </span>
 
+                                {item.id === "alerts" && activeAlertsCount > 0 && (
+                                    <span className="alert-counter-badge">
+                                        {activeAlertsCount}
+                                    </span>
+                                )}
+
                                 {activePage === item.id && (
 
                                     <ChevronRight
@@ -550,46 +617,68 @@ function App() {
                     </div>
 
 
-                    <div className="connection-status">
+                    <div className="topbar-actions">
 
-                        <span
-                            className="connection-dot"
-                            style={{
-                                background:
-                                    hardwareStatus === "LIVE"
-                                        ? "#62c87b"
+                        <button
+                            className="pdf-report-btn"
+                            onClick={() => setIsPdfModalOpen(true)}
+                            title="Generate and download farm telemetry PDF report"
+                        >
+                            <FileDown size={15} />
+                            <span>PDF Report</span>
+                        </button>
+
+                        <button
+                            className="theme-toggle-btn"
+                            onClick={toggleTheme}
+                            title={`Switch to ${theme === "dark" ? "Light" : "Dark"} Mode`}
+                        >
+                            {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+                            <span>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
+                        </button>
+
+                        <div className="connection-status">
+
+                            <span
+                                className="connection-dot"
+                                style={{
+                                    background:
+                                        hardwareStatus === "LIVE"
+                                            ? "#62c87b"
+                                            : hardwareStatus === "STALE"
+                                                ? "#d4a84b"
+                                                : "#777",
+
+                                    boxShadow:
+                                        hardwareStatus === "LIVE"
+                                            ? "0 0 10px rgba(98, 200, 123, 0.5)"
+                                            : "none",
+                                }}
+                            />
+
+                            <div>
+
+                                <div className="connection-label">
+                                    ESP32
+                                </div>
+
+                                <div className="connection-value">
+
+                                    {hardwareStatus === "LIVE"
+                                        ? "CONNECTED"
                                         : hardwareStatus === "STALE"
-                                            ? "#d4a84b"
-                                            : "#777",
+                                            ? "STALE DATA"
+                                            : hardwareStatus === "NO_DATA"
+                                                ? "NO DATA"
+                                                : "OFFLINE"}
 
-                                boxShadow:
-                                    hardwareStatus === "LIVE"
-                                        ? "0 0 10px rgba(98, 200, 123, 0.5)"
-                                        : "none",
-                            }}
-                        />
-
-                        <div>
-
-                            <div className="connection-label">
-                                ESP32
-                            </div>
-
-                            <div className="connection-value">
-
-                                {hardwareStatus === "LIVE"
-                                    ? "CONNECTED"
-                                    : hardwareStatus === "STALE"
-                                        ? "STALE DATA"
-                                        : hardwareStatus === "NO_DATA"
-                                            ? "NO DATA"
-                                            : "OFFLINE"}
+                                </div>
 
                             </div>
+
+                            <Wifi size={17} />
 
                         </div>
-
-                        <Wifi size={17} />
 
                     </div>
 
@@ -621,6 +710,8 @@ function App() {
                     <AnalysisPage
                         liveData={liveData}
                         backendConnected={backendConnected}
+                        theme={theme}
+                        onOpenPdfModal={() => setIsPdfModalOpen(true)}
                     />
                 )}
 
@@ -628,10 +719,22 @@ function App() {
                     <AlertsPage
                         liveData={liveData}
                         backendConnected={backendConnected}
+                        sensorHealth={sensorHealth}
+                        historyData={historyData}
+                        alerts={realAlerts}
+                        onOpenPdfModal={() => setIsPdfModalOpen(true)}
                     />
                 )}
 
             </main>
+
+            <PdfReportModal
+                isOpen={isPdfModalOpen}
+                onClose={() => setIsPdfModalOpen(false)}
+                liveData={liveData}
+                historyData={historyData}
+                alerts={realAlerts}
+            />
 
         </div>
     );
@@ -3311,7 +3414,12 @@ function ESP32Node({
 // ANALYSIS PAGE
 // =========================================================
 
-function AnalysisPage() {
+function AnalysisPage({
+    liveData,
+    backendConnected,
+    theme = "dark",
+    onOpenPdfModal,
+}) {
 
     const [historyData, setHistoryData] =
         useState([]);
@@ -3321,6 +3429,16 @@ function AnalysisPage() {
 
     const [activeTab, setActiveTab] =
         useState("overview");
+
+    const isLight = theme === "light";
+    const chartGridStroke = isLight ? "#e2ebe5" : "#26352c";
+    const chartAxisStroke = isLight ? "#6b7d72" : "#627067";
+    const chartTooltipStyle = {
+        background: isLight ? "#ffffff" : "#101a14",
+        border: isLight ? "1px solid #cad5ce" : "1px solid #294034",
+        color: isLight ? "#16241b" : "#dce7df",
+        borderRadius: "8px",
+    };
 
 
     // =======================================================
@@ -3610,31 +3728,46 @@ function AnalysisPage() {
                     </div>
 
 
-                    <div
-                        style={{
-                            padding:
-                                "9px 13px",
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
 
-                            border:
-                                "1px solid rgba(98,200,123,0.16)",
+                        <div
+                            style={{
+                                padding:
+                                    "9px 13px",
 
-                            borderRadius:
-                                "8px",
+                                border:
+                                    "1px solid rgba(98,200,123,0.16)",
 
-                            color:
-                                "#708078",
+                                borderRadius:
+                                    "8px",
 
-                            fontFamily:
-                                '"JetBrains Mono", monospace',
+                                color:
+                                    "#708078",
 
-                            fontSize:
-                                "9px",
-                        }}
-                    >
+                                fontFamily:
+                                    '"JetBrains Mono", monospace',
 
-                        {loading
-                            ? "LOADING DATA"
-                            : `${historyData.length} RECORDED SAMPLES`}
+                                fontSize:
+                                    "9px",
+                            }}
+                        >
+
+                            {loading
+                                ? "LOADING DATA"
+                                : `${historyData.length} RECORDED SAMPLES`}
+
+                        </div>
+
+                        {onOpenPdfModal && (
+                            <button
+                                className="pdf-report-btn"
+                                onClick={onOpenPdfModal}
+                                style={{ padding: "8px 14px", fontSize: "10.5px" }}
+                            >
+                                <FileDown size={14} />
+                                <span>Export PDF Report</span>
+                            </button>
+                        )}
 
                     </div>
 
@@ -3833,6 +3966,7 @@ function AnalysisPage() {
                                     data={
                                         chartData
                                     }
+                                    theme={theme}
                                 />
 
                             </ChartPanel>
@@ -3847,6 +3981,7 @@ function AnalysisPage() {
                                     data={
                                         chartData
                                     }
+                                    theme={theme}
                                 />
 
                             </ChartPanel>
@@ -3879,6 +4014,7 @@ function AnalysisPage() {
                                     data={
                                         chartData
                                     }
+                                    theme={theme}
                                 />
 
                             </ChartPanel>
@@ -3893,6 +4029,7 @@ function AnalysisPage() {
                                     data={
                                         chartData
                                     }
+                                    theme={theme}
                                 />
 
                             </ChartPanel>
@@ -3948,13 +4085,13 @@ function AnalysisPage() {
 
                                     <CartesianGrid
                                         strokeDasharray="3 3"
-                                        stroke="#26352c"
+                                        stroke={chartGridStroke}
                                     />
 
 
                                     <XAxis
                                         dataKey="time"
-                                        stroke="#627067"
+                                        stroke={chartAxisStroke}
                                         tick={{
                                             fontSize:
                                                 9,
@@ -3963,7 +4100,7 @@ function AnalysisPage() {
 
 
                                     <YAxis
-                                        stroke="#627067"
+                                        stroke={chartAxisStroke}
                                         tick={{
                                             fontSize:
                                                 9,
@@ -3972,19 +4109,7 @@ function AnalysisPage() {
 
 
                                     <Tooltip
-                                        contentStyle={{
-                                            background:
-                                                "#101a14",
-
-                                            border:
-                                                "1px solid #294034",
-
-                                            borderRadius:
-                                                "8px",
-
-                                            color:
-                                                "#dce7df",
-                                        }}
+                                        contentStyle={chartTooltipStyle}
                                     />
 
 
@@ -4037,29 +4162,23 @@ function AnalysisPage() {
 
                                         <CartesianGrid
                                             strokeDasharray="3 3"
-                                            stroke="#26352c"
+                                            stroke={chartGridStroke}
                                         />
 
 
                                         <XAxis
                                             dataKey="time"
-                                            stroke="#627067"
+                                            stroke={chartAxisStroke}
                                         />
 
 
                                         <YAxis
-                                            stroke="#627067"
+                                            stroke={chartAxisStroke}
                                         />
 
 
                                         <Tooltip
-                                            contentStyle={{
-                                                background:
-                                                    "#101a14",
-
-                                                border:
-                                                    "1px solid #294034",
-                                            }}
+                                            contentStyle={chartTooltipStyle}
                                         />
 
 
@@ -4095,29 +4214,23 @@ function AnalysisPage() {
 
                                         <CartesianGrid
                                             strokeDasharray="3 3"
-                                            stroke="#26352c"
+                                            stroke={chartGridStroke}
                                         />
 
 
                                         <XAxis
                                             dataKey="time"
-                                            stroke="#627067"
+                                            stroke={chartAxisStroke}
                                         />
 
 
                                         <YAxis
-                                            stroke="#627067"
+                                            stroke={chartAxisStroke}
                                         />
 
 
                                         <Tooltip
-                                            contentStyle={{
-                                                background:
-                                                    "#101a14",
-
-                                                border:
-                                                    "1px solid #294034",
-                                            }}
+                                            contentStyle={chartTooltipStyle}
                                         />
 
 
@@ -4213,29 +4326,23 @@ function AnalysisPage() {
 
                                     <CartesianGrid
                                         strokeDasharray="3 3"
-                                        stroke="#26352c"
+                                        stroke={chartGridStroke}
                                     />
 
 
                                     <XAxis
                                         dataKey="time"
-                                        stroke="#627067"
+                                        stroke={chartAxisStroke}
                                     />
 
 
                                     <YAxis
-                                        stroke="#627067"
+                                        stroke={chartAxisStroke}
                                     />
 
 
                                     <Tooltip
-                                        contentStyle={{
-                                            background:
-                                                "#101a14",
-
-                                            border:
-                                                "1px solid #294034",
-                                        }}
+                                        contentStyle={chartTooltipStyle}
                                     />
 
 
@@ -4393,29 +4500,23 @@ function AnalysisPage() {
 
                                     <CartesianGrid
                                         strokeDasharray="3 3"
-                                        stroke="#26352c"
+                                        stroke={chartGridStroke}
                                     />
 
 
                                     <XAxis
                                         dataKey="time"
-                                        stroke="#627067"
+                                        stroke={chartAxisStroke}
                                     />
 
 
                                     <YAxis
-                                        stroke="#627067"
+                                        stroke={chartAxisStroke}
                                     />
 
 
                                     <Tooltip
-                                        contentStyle={{
-                                            background:
-                                                "#101a14",
-
-                                            border:
-                                                "1px solid #294034",
-                                        }}
+                                        contentStyle={chartTooltipStyle}
                                     />
 
 
@@ -4470,29 +4571,23 @@ function AnalysisPage() {
 
                                         <CartesianGrid
                                             strokeDasharray="3 3"
-                                            stroke="#26352c"
+                                            stroke={chartGridStroke}
                                         />
 
 
                                         <XAxis
                                             dataKey="time"
-                                            stroke="#627067"
+                                            stroke={chartAxisStroke}
                                         />
 
 
                                         <YAxis
-                                            stroke="#627067"
+                                            stroke={chartAxisStroke}
                                         />
 
 
                                         <Tooltip
-                                            contentStyle={{
-                                                background:
-                                                    "#101a14",
-
-                                                border:
-                                                    "1px solid #294034",
-                                            }}
+                                            contentStyle={chartTooltipStyle}
                                         />
 
 
@@ -4640,192 +4735,520 @@ function AnalysisSummary({
     );
 }
 // =========================================================
+// PDF REPORT GENERATION MODAL
+// =========================================================
+
+function PdfReportModal({
+    isOpen,
+    onClose,
+    liveData,
+    historyData = [],
+    alerts = [],
+}) {
+    const [range, setRange] = useState("all");
+    const [customFrom, setCustomFrom] = useState("");
+    const [customTo, setCustomTo] = useState("");
+    const [isGenerating, setIsGenerating] = useState(false);
+    const [downloadSuccess, setDownloadSuccess] = useState("");
+
+    if (!isOpen) return null;
+
+    const handleDownload = async () => {
+        setIsGenerating(true);
+        setDownloadSuccess("");
+        try {
+            const filename = generatePdfReport({
+                liveData,
+                historyData,
+                alerts,
+                dateRange: range,
+                customRange: range === "custom" && customFrom && customTo
+                    ? { from: customFrom, to: customTo }
+                    : null,
+            });
+            setDownloadSuccess(`Successfully exported: ${filename}`);
+            setTimeout(() => {
+                setDownloadSuccess("");
+                onClose();
+            }, 1400);
+        } catch (error) {
+            console.error("PDF generation failed:", error);
+            alert("Could not generate PDF report: " + error.message);
+        } finally {
+            setIsGenerating(false);
+        }
+    };
+
+    return (
+        <div className="modal-backdrop" onClick={onClose}>
+            <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                    <div>
+                        <div className="panel-label">AGRO-INTELLIGENCE EXPORT</div>
+                        <h3 className="modal-title">Generate Farm Telemetry PDF</h3>
+                    </div>
+                    <button className="modal-close-btn" onClick={onClose} aria-label="Close dialog">
+                        <X size={18} />
+                    </button>
+                </div>
+
+                <p style={{ color: "#798b80", fontSize: "12px", lineHeight: "1.6", margin: "0 0 16px" }}>
+                    Exports an executive PDF intelligence report containing current sensor readings, SSI/MSI/FSI stability indices, adaptive sampling intervals, active & historical alerts, agronomic recommendations, and vector trend charts.
+                </p>
+
+                <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-primary, #e2ebe4)", marginBottom: "8px" }}>
+                    Select Telemetry Date / Sample Scope:
+                </div>
+
+                <div className="range-options-grid">
+                    <button
+                        type="button"
+                        className={`range-option-btn ${range === "all" ? "selected" : ""}`}
+                        onClick={() => setRange("all")}
+                    >
+                        <strong>All Recorded History</strong>
+                        <div style={{ fontSize: "9px", opacity: 0.75, marginTop: "2px" }}>
+                            {historyData.length} total telemetry samples
+                        </div>
+                    </button>
+
+                    <button
+                        type="button"
+                        className={`range-option-btn ${range === "24h" ? "selected" : ""}`}
+                        onClick={() => setRange("24h")}
+                    >
+                        <strong>Last 24 Hours</strong>
+                        <div style={{ fontSize: "9px", opacity: 0.75, marginTop: "2px" }}>
+                            Complete diurnal microclimate cycle
+                        </div>
+                    </button>
+
+                    <button
+                        type="button"
+                        className={`range-option-btn ${range === "12h" ? "selected" : ""}`}
+                        onClick={() => setRange("12h")}
+                    >
+                        <strong>Last 12 Hours</strong>
+                        <div style={{ fontSize: "9px", opacity: 0.75, marginTop: "2px" }}>
+                            Recent daytime/nighttime shift
+                        </div>
+                    </button>
+
+                    <button
+                        type="button"
+                        className={`range-option-btn ${range === "1h" ? "selected" : ""}`}
+                        onClick={() => setRange("1h")}
+                    >
+                        <strong>Last 1 Hour</strong>
+                        <div style={{ fontSize: "9px", opacity: 0.75, marginTop: "2px" }}>
+                            Immediate high-resolution readings
+                        </div>
+                    </button>
+                </div>
+
+                <div
+                    style={{
+                        background: "rgba(98, 200, 123, 0.07)",
+                        border: "1px solid rgba(98, 200, 123, 0.2)",
+                        borderRadius: "8px",
+                        padding: "10px 14px",
+                        fontSize: "11px",
+                        color: "#7cc98f",
+                        lineHeight: "1.5",
+                    }}
+                >
+                    ✓ <strong>Included in report:</strong> Dual Soil Moisture probes (S1/S2/Avg), DHT22 Temp & Humidity, BH1750 Light, Rain detection, INA219 Battery & Power, SSI / MSI / FSI stability metrics, {alerts.length} verified real-time events, and 2 scalable vector charts.
+                </div>
+
+                {downloadSuccess && (
+                    <div style={{ marginTop: "12px", color: "#62c87b", fontSize: "11px", fontWeight: 600, display: "flex", alignItems: "center", gap: "6px" }}>
+                        <Check size={15} /> {downloadSuccess}
+                    </div>
+                )}
+
+                <div className="modal-actions">
+                    <button className="modal-btn-secondary" onClick={onClose} disabled={isGenerating}>
+                        Cancel
+                    </button>
+                    <button className="modal-btn-primary" onClick={handleDownload} disabled={isGenerating}>
+                        <FileDown size={14} />
+                        <span>{isGenerating ? "Compiling Report..." : "Download PDF Report"}</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// =========================================================
 // ALERTS PAGE
 // =========================================================
 
 function AlertsPage({
     liveData,
     backendConnected,
+    sensorHealth,
+    historyData = [],
+    alerts: propAlerts,
+    onOpenPdfModal,
 }) {
+    const [selectedFilter, setSelectedFilter] = useState("ALL");
 
-    const alerts = [];
+    // Use passed alerts or compute dynamically
+    const alerts = propAlerts || getRealtimeAlerts({
+        liveData,
+        backendConnected,
+        sensorHealth,
+        history: historyData,
+    });
 
-    if (!backendConnected) {
-        alerts.push({
-            type: "CRITICAL",
-            title: "Backend Offline",
-            message: "The Python backend is not currently reachable.",
-            time: "Current",
-        });
-    }
+    const criticalCount = alerts.filter((a) => a.severity === "CRITICAL").length;
+    const warningCount = alerts.filter((a) => a.severity === "WARNING").length;
+    const infoCount = alerts.filter((a) => a.severity === "INFO").length;
 
-    if (
-        liveData?.rain === true
-    ) {
-        alerts.push({
-            type: "WARNING",
-            title: "Rain Detected",
-            message: "Rain sensor is currently detecting wet conditions.",
-            time: liveData?.timestamp || "Current",
-        });
-    }
+    const filteredAlerts = alerts.filter((a) => {
+        if (selectedFilter === "CRITICAL") return a.severity === "CRITICAL";
+        if (selectedFilter === "WARNING") return a.severity === "WARNING";
+        if (selectedFilter === "INFO") return a.severity === "INFO";
+        return true;
+    });
 
-    if (
-        Number.isFinite(Number(liveData?.soil_moisture_1)) &&
-        Number(liveData.soil_moisture_1) < 30
-    ) {
-        alerts.push({
-            type: "WARNING",
-            title: "Low Soil Moisture",
-            message: "Soil Moisture 01 is below the monitoring threshold.",
-            time: liveData?.timestamp || "Current",
-        });
-    }
-
-    if (alerts.length === 0) {
-        alerts.push({
-            type: "INFO",
-            title: "No Active Alerts",
-            message: "No alert conditions are currently detected.",
-            time: "Current",
-        });
-    }
-
-    const getColor = (type) => {
-
-        if (type === "CRITICAL") {
-            return "#d65f5f";
+    const getSeverityStyles = (severity) => {
+        if (severity === "CRITICAL") {
+            return {
+                color: "#e87a7a",
+                borderLeft: "3px solid #d65f5f",
+                bgBadge: "rgba(214, 95, 95, 0.15)",
+                borderBadge: "rgba(214, 95, 95, 0.35)",
+            };
         }
-
-        if (type === "WARNING") {
-            return "#d4a84b";
+        if (severity === "WARNING") {
+            return {
+                color: "#e0b65a",
+                borderLeft: "3px solid #d4a84b",
+                bgBadge: "rgba(212, 168, 75, 0.15)",
+                borderBadge: "rgba(212, 168, 75, 0.35)",
+            };
         }
-
-        return "#62c87b";
+        return {
+            color: "#7fe099",
+            borderLeft: "3px solid #62c87b",
+            bgBadge: "rgba(98, 200, 123, 0.15)",
+            borderBadge: "rgba(98, 200, 123, 0.35)",
+        };
     };
+
+    const fsi = liveData?.fsi ?? liveData?.farm_stability?.fsi ?? 100;
+    const fsiStatus = liveData?.fsi_status ?? liveData?.farm_stability?.fsi_status ?? "STABLE";
 
     return (
         <div className="page-content">
 
-            <section className="section">
+            <section className="section" style={{ marginTop: 0 }}>
 
-                <div className="section-heading">
-
+                {/* HEADING ROW */}
+                <div
+                    className="section-heading"
+                    style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "flex-end",
+                        flexWrap: "wrap",
+                        gap: "16px",
+                        marginBottom: "20px",
+                    }}
+                >
                     <div>
-
                         <div className="section-kicker">
-                            SYSTEM EVENTS
+                            REAL-TIME TELEMETRY DIAGNOSTICS
                         </div>
-
                         <h2>
-                            Alerts & Notifications
+                            System & Sensor Alerts
                         </h2>
-
+                        <p style={{ margin: "4px 0 0", color: "#74867b", fontSize: "12px" }}>
+                            Real-time alerts derived from ESP32 telemetry, hardware fault detection, and agro-stability thresholds.
+                        </p>
                     </div>
 
+                    {onOpenPdfModal && (
+                        <button className="pdf-report-btn" onClick={onOpenPdfModal}>
+                            <FileDown size={15} />
+                            <span>Export Alerts PDF</span>
+                        </button>
+                    )}
                 </div>
 
+                {/* STATS OVERVIEW CARDS */}
+                <div className="alerts-stats-grid">
+                    <div className="alert-stat-card">
+                        <div
+                            className="alert-stat-icon"
+                            style={{
+                                background: "rgba(98, 200, 123, 0.12)",
+                                color: "#62c87b",
+                            }}
+                        >
+                            <Bell size={20} />
+                        </div>
+                        <div>
+                            <div className="alert-stat-label">TOTAL EVENTS</div>
+                            <div className="alert-stat-value">{alerts.length}</div>
+                        </div>
+                    </div>
 
+                    <div className="alert-stat-card">
+                        <div
+                            className="alert-stat-icon"
+                            style={{
+                                background: criticalCount > 0 ? "rgba(214, 95, 95, 0.15)" : "rgba(255, 255, 255, 0.04)",
+                                color: criticalCount > 0 ? "#e87a7a" : "#728479",
+                            }}
+                        >
+                            <AlertTriangle size={20} />
+                        </div>
+                        <div>
+                            <div className="alert-stat-label">CRITICAL FAULTS</div>
+                            <div
+                                className="alert-stat-value"
+                                style={{ color: criticalCount > 0 ? "#e87a7a" : undefined }}
+                            >
+                                {criticalCount}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="alert-stat-card">
+                        <div
+                            className="alert-stat-icon"
+                            style={{
+                                background: warningCount > 0 ? "rgba(212, 168, 75, 0.15)" : "rgba(255, 255, 255, 0.04)",
+                                color: warningCount > 0 ? "#e0b65a" : "#728479",
+                            }}
+                        >
+                            <Activity size={20} />
+                        </div>
+                        <div>
+                            <div className="alert-stat-label">WARNINGS</div>
+                            <div
+                                className="alert-stat-value"
+                                style={{ color: warningCount > 0 ? "#e0b65a" : undefined }}
+                            >
+                                {warningCount}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="alert-stat-card">
+                        <div
+                            className="alert-stat-icon"
+                            style={{
+                                background: "rgba(98, 200, 123, 0.12)",
+                                color: "#62c87b",
+                            }}
+                        >
+                            <ShieldCheck size={20} />
+                        </div>
+                        <div>
+                            <div className="alert-stat-label">FARM STABILITY (FSI)</div>
+                            <div className="alert-stat-value">
+                                {fsi}
+                                <span style={{ fontSize: "11px", marginLeft: "4px", fontWeight: 500, color: "#74867b" }}>
+                                    / {fsiStatus}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* FILTER BUTTONS */}
+                <div className="alert-filters-bar">
+                    <button
+                        type="button"
+                        className={`alert-filter-btn ${selectedFilter === "ALL" ? "active" : ""}`}
+                        onClick={() => setSelectedFilter("ALL")}
+                    >
+                        ALL ALERTS ({alerts.length})
+                    </button>
+
+                    <button
+                        type="button"
+                        className={`alert-filter-btn ${selectedFilter === "CRITICAL" ? "active" : ""}`}
+                        onClick={() => setSelectedFilter("CRITICAL")}
+                    >
+                        CRITICAL ({criticalCount})
+                    </button>
+
+                    <button
+                        type="button"
+                        className={`alert-filter-btn ${selectedFilter === "WARNING" ? "active" : ""}`}
+                        onClick={() => setSelectedFilter("WARNING")}
+                    >
+                        WARNINGS ({warningCount})
+                    </button>
+
+                    <button
+                        type="button"
+                        className={`alert-filter-btn ${selectedFilter === "INFO" ? "active" : ""}`}
+                        onClick={() => setSelectedFilter("INFO")}
+                    >
+                        INFORMATIONAL ({infoCount})
+                    </button>
+                </div>
+
+                {/* ALERTS LIST */}
                 <div
                     style={{
                         display: "grid",
-                        gap: "12px",
+                        gap: "14px",
                     }}
                 >
-
-                    {alerts.map((alert, index) => {
-
-                        const color =
-                            getColor(alert.type);
+                    {filteredAlerts.map((alert, index) => {
+                        const style = getSeverityStyles(alert.severity);
 
                         return (
-
                             <div
-                                key={`${alert.title}-${index}`}
-                                className="panel"
+                                key={alert.id || `${alert.title}-${index}`}
+                                className="alert-card"
                                 style={{
-                                    padding: "18px",
-                                    borderLeft:
-                                        `3px solid ${color}`,
+                                    borderLeft: style.borderLeft,
                                 }}
                             >
-
                                 <div
                                     style={{
                                         display: "flex",
-                                        justifyContent:
-                                            "space-between",
-                                        alignItems: "center",
+                                        justifyContent: "space-between",
+                                        alignItems: "flex-start",
                                         gap: "15px",
+                                        flexWrap: "wrap",
                                     }}
                                 >
-
                                     <div>
-
                                         <div
                                             style={{
-                                                color,
-                                                fontFamily:
-                                                    '"JetBrains Mono", monospace',
-                                                fontSize: "10px",
-                                                letterSpacing:
-                                                    "0.12em",
+                                                display: "flex",
+                                                alignItems: "center",
+                                                gap: "8px",
+                                                flexWrap: "wrap",
                                             }}
                                         >
-                                            {alert.type}
+                                            <span
+                                                className={`alert-badge alert-badge-${alert.severity.toLowerCase()}`}
+                                            >
+                                                {alert.severity}
+                                            </span>
+
+                                            {alert.category && (
+                                                <span className="alert-category-tag">
+                                                    {alert.category}
+                                                </span>
+                                            )}
+
+                                            {alert.status && (
+                                                <span
+                                                    className={`alert-status-badge alert-status-${alert.status.toLowerCase()}`}
+                                                >
+                                                    {alert.status}
+                                                </span>
+                                            )}
                                         </div>
 
                                         <div
                                             style={{
-                                                marginTop: "7px",
-                                                color: "#e8eee9",
-                                                fontSize: "15px",
+                                                marginTop: "8px",
+                                                color: "var(--text-primary, #e8eee9)",
+                                                fontSize: "16px",
                                                 fontWeight: 600,
                                             }}
                                         >
                                             {alert.title}
                                         </div>
-
                                     </div>
 
-                                    <Bell
-                                        size={18}
-                                        color={color}
-                                    />
-
+                                    {alert.reading && (
+                                        <div
+                                            style={{
+                                                padding: "6px 12px",
+                                                borderRadius: "7px",
+                                                background: "rgba(255, 255, 255, 0.04)",
+                                                border: "1px solid rgba(255, 255, 255, 0.08)",
+                                                fontFamily: '"JetBrains Mono", monospace',
+                                                fontSize: "12px",
+                                                fontWeight: 600,
+                                                color: style.color,
+                                            }}
+                                        >
+                                            {alert.reading}
+                                        </div>
+                                    )}
                                 </div>
-
 
                                 <div
                                     style={{
                                         marginTop: "10px",
-                                        color: "#839189",
-                                        fontSize: "12px",
+                                        color: "var(--text-secondary, #839189)",
+                                        fontSize: "13px",
                                         lineHeight: "1.6",
                                     }}
                                 >
-                                    {alert.message}
+                                    {alert.reason}
                                 </div>
 
+                                {alert.recommendation && (
+                                    <div
+                                        style={{
+                                            marginTop: "12px",
+                                            padding: "9px 13px",
+                                            borderRadius: "7px",
+                                            background: "rgba(98, 200, 123, 0.06)",
+                                            border: "1px solid rgba(98, 200, 123, 0.15)",
+                                            fontSize: "11.5px",
+                                            color: "#7ac58c",
+                                            lineHeight: "1.5",
+                                        }}
+                                    >
+                                        <strong style={{ color: "#95e0a6", marginRight: "6px" }}>
+                                            Action:
+                                        </strong>
+                                        {alert.recommendation}
+                                    </div>
+                                )}
 
                                 <div
                                     style={{
-                                        marginTop: "10px",
-                                        color: "#58665e",
-                                        fontFamily:
-                                            '"JetBrains Mono", monospace',
-                                        fontSize: "9px",
+                                        marginTop: "12px",
+                                        display: "flex",
+                                        justifyContent: "space-between",
+                                        alignItems: "center",
+                                        color: "#5e7166",
+                                        fontFamily: '"JetBrains Mono", monospace',
+                                        fontSize: "9.5px",
                                     }}
                                 >
-                                    {alert.time}
+                                    <span>Timestamp: {alert.timestamp}</span>
+                                    <span>Status: {alert.status || "ACTIVE"}</span>
                                 </div>
-
                             </div>
-
                         );
-
                     })}
 
+                    {filteredAlerts.length === 0 && (
+                        <div
+                            className="panel"
+                            style={{
+                                padding: "40px 20px",
+                                textAlign: "center",
+                                color: "#74867b",
+                            }}
+                        >
+                            <Check size={28} color="#62c87b" style={{ margin: "0 auto 12px" }} />
+                            <div style={{ fontSize: "15px", fontWeight: 600, color: "var(--text-primary, #e2ebe4)" }}>
+                                No Alerts Matching Filter: {selectedFilter}
+                            </div>
+                            <div style={{ fontSize: "12px", marginTop: "6px" }}>
+                                All sensor parameters and system operations are running normally.
+                            </div>
+                        </div>
+                    )}
                 </div>
 
             </section>
@@ -5036,7 +5459,17 @@ function LargeChart({
 
 function TemperatureChart({
     data,
+    theme = "dark",
 }) {
+    const isLight = theme === "light";
+    const gridColor = isLight ? "#e2ebe5" : "#26352c";
+    const axisColor = isLight ? "#6b7d72" : "#627067";
+    const tooltipStyle = {
+        background: isLight ? "#ffffff" : "#101a14",
+        border: isLight ? "1px solid #cad5ce" : "1px solid #294034",
+        color: isLight ? "#16241b" : "#e8eee9",
+        borderRadius: "8px",
+    };
 
     return (
 
@@ -5067,13 +5500,13 @@ function TemperatureChart({
 
                     <CartesianGrid
                         strokeDasharray="3 3"
-                        stroke="#26352c"
+                        stroke={gridColor}
                     />
 
 
                     <XAxis
                         dataKey="time"
-                        stroke="#627067"
+                        stroke={axisColor}
                         tick={{
                             fontSize:
                                 9,
@@ -5082,7 +5515,7 @@ function TemperatureChart({
 
 
                     <YAxis
-                        stroke="#627067"
+                        stroke={axisColor}
                         tick={{
                             fontSize:
                                 9,
@@ -5091,16 +5524,7 @@ function TemperatureChart({
 
 
                     <Tooltip
-                        contentStyle={{
-                            background:
-                                "#101a14",
-
-                            border:
-                                "1px solid #294034",
-
-                            borderRadius:
-                                "8px",
-                        }}
+                        contentStyle={tooltipStyle}
                     />
 
 
@@ -5128,7 +5552,17 @@ function TemperatureChart({
 
 function SoilChart({
     data,
+    theme = "dark",
 }) {
+    const isLight = theme === "light";
+    const gridColor = isLight ? "#e2ebe5" : "#26352c";
+    const axisColor = isLight ? "#6b7d72" : "#627067";
+    const tooltipStyle = {
+        background: isLight ? "#ffffff" : "#101a14",
+        border: isLight ? "1px solid #cad5ce" : "1px solid #294034",
+        color: isLight ? "#16241b" : "#e8eee9",
+        borderRadius: "8px",
+    };
 
     return (
 
@@ -5159,13 +5593,13 @@ function SoilChart({
 
                     <CartesianGrid
                         strokeDasharray="3 3"
-                        stroke="#26352c"
+                        stroke={gridColor}
                     />
 
 
                     <XAxis
                         dataKey="time"
-                        stroke="#627067"
+                        stroke={axisColor}
                         tick={{
                             fontSize:
                                 9,
@@ -5174,7 +5608,7 @@ function SoilChart({
 
 
                     <YAxis
-                        stroke="#627067"
+                        stroke={axisColor}
                         tick={{
                             fontSize:
                                 9,
@@ -5183,13 +5617,7 @@ function SoilChart({
 
 
                     <Tooltip
-                        contentStyle={{
-                            background:
-                                "#101a14",
-
-                            border:
-                                "1px solid #294034",
-                        }}
+                        contentStyle={tooltipStyle}
                     />
 
 
@@ -5230,7 +5658,17 @@ function SoilChart({
 
 function EnvironmentChart({
     data,
+    theme = "dark",
 }) {
+    const isLight = theme === "light";
+    const gridColor = isLight ? "#e2ebe5" : "#26352c";
+    const axisColor = isLight ? "#6b7d72" : "#627067";
+    const tooltipStyle = {
+        background: isLight ? "#ffffff" : "#101a14",
+        border: isLight ? "1px solid #cad5ce" : "1px solid #294034",
+        color: isLight ? "#16241b" : "#e8eee9",
+        borderRadius: "8px",
+    };
 
     return (
 
@@ -5261,29 +5699,23 @@ function EnvironmentChart({
 
                     <CartesianGrid
                         strokeDasharray="3 3"
-                        stroke="#26352c"
+                        stroke={gridColor}
                     />
 
 
                     <XAxis
                         dataKey="time"
-                        stroke="#627067"
+                        stroke={axisColor}
                     />
 
 
                     <YAxis
-                        stroke="#627067"
+                        stroke={axisColor}
                     />
 
 
                     <Tooltip
-                        contentStyle={{
-                            background:
-                                "#101a14",
-
-                            border:
-                                "1px solid #294034",
-                        }}
+                        contentStyle={tooltipStyle}
                     />
 
 
@@ -5324,7 +5756,17 @@ function EnvironmentChart({
 
 function PowerChart({
     data,
+    theme = "dark",
 }) {
+    const isLight = theme === "light";
+    const gridColor = isLight ? "#e2ebe5" : "#26352c";
+    const axisColor = isLight ? "#6b7d72" : "#627067";
+    const tooltipStyle = {
+        background: isLight ? "#ffffff" : "#101a14",
+        border: isLight ? "1px solid #cad5ce" : "1px solid #294034",
+        color: isLight ? "#16241b" : "#e8eee9",
+        borderRadius: "8px",
+    };
 
     return (
 
@@ -5355,29 +5797,23 @@ function PowerChart({
 
                     <CartesianGrid
                         strokeDasharray="3 3"
-                        stroke="#26352c"
+                        stroke={gridColor}
                     />
 
 
                     <XAxis
                         dataKey="time"
-                        stroke="#627067"
+                        stroke={axisColor}
                     />
 
 
                     <YAxis
-                        stroke="#627067"
+                        stroke={axisColor}
                     />
 
 
                     <Tooltip
-                        contentStyle={{
-                            background:
-                                "#101a14",
-
-                            border:
-                                "1px solid #294034",
-                        }}
+                        contentStyle={tooltipStyle}
                     />
 
 
