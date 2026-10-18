@@ -216,16 +216,15 @@ function App() {
     // =======================================================
 
     const getHardwareStatus = () => {
-
         if (!backendConnected) {
             return "OFFLINE";
         }
 
-        if (!liveData) {
-            return "NO_DATA";
+        if (liveData?.is_simulated === true || liveData?.data_source === "SIMULATION") {
+            return "SIMULATION";
         }
 
-        if (!liveData.timestamp) {
+        if (!liveData) {
             return "NO_DATA";
         }
 
@@ -241,7 +240,18 @@ function App() {
             return "STALE";
         }
 
-        return "OFFLINE";
+        if (
+            liveData.last_known_telemetry ||
+            liveData.last_known_stability ||
+            liveData.data_source === "LAST KNOWN HARDWARE" ||
+            liveData.hardware_status === "ESP32 NOT CONNECTED" ||
+            liveData.timestamp ||
+            (historyData && historyData.length > 0)
+        ) {
+            return "OFFLINE";
+        }
+
+        return "NO_DATA";
     };
 
 
@@ -565,9 +575,11 @@ function App() {
                                     ? "SYSTEM ONLINE"
                                     : hardwareStatus === "STALE"
                                         ? "DATA STALE"
-                                        : hardwareStatus === "NO_DATA"
-                                            ? "NO HARDWARE DATA"
-                                            : "SYSTEM OFFLINE"}
+                                        : hardwareStatus === "SIMULATION"
+                                            ? "SIMULATION MODE"
+                                            : hardwareStatus === "NO_DATA"
+                                                ? "NO HARDWARE DATA"
+                                                : "HARDWARE OFFLINE"}
 
                             </div>
 
@@ -668,9 +680,11 @@ function App() {
                                         ? "CONNECTED"
                                         : hardwareStatus === "STALE"
                                             ? "STALE DATA"
-                                            : hardwareStatus === "NO_DATA"
-                                                ? "NO DATA"
-                                                : "OFFLINE"}
+                                            : hardwareStatus === "SIMULATION"
+                                                ? "SIMULATION"
+                                                : hardwareStatus === "NO_DATA"
+                                                    ? "NO DATA"
+                                                    : "OFFLINE"}
 
                                 </div>
 
@@ -710,6 +724,7 @@ function App() {
                     <AnalysisPage
                         liveData={liveData}
                         backendConnected={backendConnected}
+                        hardwareStatus={hardwareStatus}
                         theme={theme}
                         onOpenPdfModal={() => setIsPdfModalOpen(true)}
                     />
@@ -849,48 +864,45 @@ function LivePage({
 
 
         OFFLINE: {
-
             title:
                 "HARDWARE OFFLINE",
-
             description:
-                "The ESP32 is not currently communicating with the monitoring backend.",
-
+                "The ESP32 is powered off. Displaying last known verified telemetry and persisted historical records.",
             color:
                 "#777",
-
         },
 
-
         NO_DATA: {
-
             title:
                 "NO HARDWARE DATA",
-
             description:
-                "The backend is running, but no ESP32 sensor reading has been received yet.",
-
+                "The backend is running, but no ESP32 sensor reading has been recorded yet.",
             color:
                 "#777",
+        },
 
+        SIMULATION: {
+            title:
+                "SIMULATION MODE",
+            description:
+                "Displaying simulated telemetry. Physical hardware monitoring is paused.",
+            color:
+                "#42c8d9",
         },
 
     };
 
 
     const currentStatus =
-        statusConfig[hardwareStatus];
+        statusConfig[hardwareStatus] || statusConfig.OFFLINE;
 
 
     // =======================================================
-    // LAST-KNOWN STABILITY
+    // LAST-KNOWN STABILITY & TELEMETRY
     // =======================================================
-    // Current SSI/MSI/FSI are used only while fresh REAL hardware
-    // telemetry is available. When the ESP32 disconnects, retain the
-    // most recent valid REAL hardware assessment instead of showing
-    // "NO ASSESSMENT".
     const hasCurrentStability =
         backendConnected &&
+        hardwareStatus === "LIVE" &&
         [liveData?.ssi, liveData?.msi, liveData?.fsi]
             .every((value) => Number.isFinite(Number(value)));
 
@@ -905,130 +917,79 @@ function LivePage({
             timestamp: liveData.timestamp,
             state: "CURRENT",
         }
-        : liveData?.last_known_stability
+        : (liveData?.last_known_stability || (liveData?.ssi !== undefined && liveData?.ssi !== null))
             ? {
-                ...liveData.last_known_stability,
-                timestamp: liveData.last_known_stability_timestamp,
+                ssi: Number(liveData.last_known_stability?.ssi ?? liveData.ssi),
+                msi: Number(liveData.last_known_stability?.msi ?? liveData.msi),
+                fsi: Number(liveData.last_known_stability?.fsi ?? liveData.fsi),
+                ssi_status: liveData.last_known_stability?.ssi_status ?? liveData.ssi_status ?? "STABLE",
+                msi_status: liveData.last_known_stability?.msi_status ?? liveData.msi_status ?? "STABLE",
+                fsi_status: liveData.last_known_stability?.fsi_status ?? liveData.fsi_status ?? "STABLE",
+                timestamp: liveData.last_known_stability_timestamp || liveData.timestamp,
                 state: "LAST KNOWN",
             }
             : null;
 
+    const activeSensorData = (hardwareStatus === "OFFLINE" && liveData?.last_known_telemetry)
+        ? { ...liveData, ...liveData.last_known_telemetry }
+        : liveData;
 
     const sensors = [
-
         {
-            name:
-                "Soil Moisture 01",
-
-            value:
-                liveData?.soil_moisture_1,
-
-            unit:
-                "%",
-
-            icon:
-                Droplets,
+            name: "Soil Moisture 01",
+            value: activeSensorData?.soil_moisture_1,
+            unit: "%",
+            icon: Droplets,
         },
-
-
         {
-            name:
-                "Soil Moisture 02",
-
-            value:
-                liveData?.soil_moisture_2,
-
-            unit:
-                "%",
-
-            icon:
-                Droplets,
+            name: "Soil Moisture 02",
+            value: activeSensorData?.soil_moisture_2,
+            unit: "%",
+            icon: Droplets,
         },
-
-
         {
-            name:
-                "Temperature",
-
-            value:
-                liveData?.temperature,
-
-            unit:
-                "°C",
-
-            icon:
-                Thermometer,
+            name: "Temperature",
+            value: activeSensorData?.temperature,
+            unit: "°C",
+            icon: Thermometer,
         },
-
-
         {
-            name:
-                "Humidity",
-
-            value:
-                liveData?.humidity,
-
-            unit:
-                "%",
-
-            icon:
-                Activity,
+            name: "Humidity",
+            value: activeSensorData?.humidity,
+            unit: "%",
+            icon: Activity,
         },
-
-
         {
-            name:
-                "Light",
-
-            value:
-                liveData?.light,
-
-            unit:
-                "lux",
-
-            icon:
-                Sun,
+            name: "Light",
+            value: activeSensorData?.light,
+            unit: "lux",
+            icon: Sun,
         },
-
-
         {
-            name:
-                "Rain",
-
+            name: "Rain",
             value:
-                liveData?.rain === true
+                activeSensorData?.rain === true
                     ? "YES"
-                    : liveData?.rain === false
+                    : activeSensorData?.rain === false
                         ? "NO"
                         : "—",
-
-            unit:
-                "",
-
-            icon:
-                CloudRain,
+            unit: "",
+            icon: CloudRain,
         },
-
     ];
 
-
     const getSensorLabel = () => {
-
-        if (
-            hardwareStatus === "LIVE"
-        ) {
+        if (hardwareStatus === "LIVE") {
             return "LIVE";
         }
-
-
-        if (
-            hardwareStatus === "STALE" ||
-            hardwareStatus === "OFFLINE"
-        ) {
-            return "LAST KNOWN";
+        if (hardwareStatus === "SIMULATION") {
+            return "SIMULATED";
         }
-
-
+        if (hardwareStatus === "STALE" || hardwareStatus === "OFFLINE") {
+            return (activeSensorData?.temperature !== undefined && activeSensorData?.temperature !== null)
+                ? "LAST KNOWN"
+                : "NO DATA";
+        }
         return "NO DATA";
     };
 
@@ -3417,6 +3378,7 @@ function ESP32Node({
 function AnalysisPage({
     liveData,
     backendConnected,
+    hardwareStatus = "OFFLINE",
     theme = "dark",
     onOpenPdfModal,
 }) {
@@ -3854,6 +3816,30 @@ function AnalysisPage({
 
 
             {/* =================================================
+          OFFLINE WITH HISTORY BANNER
+         ================================================= */}
+            {historyData.length > 0 && hardwareStatus === "OFFLINE" && (
+                <div
+                    style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "10px",
+                        padding: "11px 16px",
+                        marginBottom: "20px",
+                        borderRadius: "8px",
+                        background: isLight ? "#fbf6ec" : "rgba(212, 168, 75, 0.08)",
+                        border: isLight ? "1px solid #ead8b1" : "1px solid rgba(212, 168, 75, 0.25)",
+                        color: isLight ? "#8a661b" : "#d4a84b",
+                        fontSize: "11px",
+                        fontFamily: '"JetBrains Mono", monospace'
+                    }}
+                >
+                    <Radio size={14} />
+                    <span>ESP32 MONITORING NODE IS OFFLINE &bull; DISPLAYING {historyData.length} PERSISTED HISTORICAL READINGS</span>
+                </div>
+            )}
+
+            {/* =================================================
           NO DATA
          ================================================= */}
 
@@ -3883,10 +3869,10 @@ function AnalysisPage({
                                     "15px",
 
                                 color:
-                                    "#aab5ae",
+                                    isLight ? "#38473e" : "#aab5ae",
                             }}
                         >
-                            No historical data
+                            No historical records saved yet
                         </h3>
 
 
@@ -3896,15 +3882,14 @@ function AnalysisPage({
                                     "8px",
 
                                 color:
-                                    "#627067",
+                                    isLight ? "#63746a" : "#627067",
 
                                 fontSize:
                                     "12px",
                             }}
                         >
-                            Turn on the ESP32 and allow
-                            the monitoring node to transmit
-                            readings.
+                            The database currently contains no recorded sensor telemetry.
+                            Power on the ESP32 monitoring node to start capturing readings.
                         </p>
 
                     </div>

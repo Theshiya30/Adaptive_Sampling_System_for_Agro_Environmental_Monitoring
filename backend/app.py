@@ -1,11 +1,15 @@
 from flask import Flask, render_template, jsonify, request
-from datetime import datetime
+from flask_cors import CORS
+from datetime import datetime, timezone
 import random
 import threading
 import time
 import json
+import os
 from pathlib import Path
+from dotenv import load_dotenv
 
+load_dotenv()
 
 # ============================================================
 # SMART FARM ADAPTIVE MONITORING SYSTEM
@@ -13,6 +17,7 @@ from pathlib import Path
 # ============================================================
 
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 
 # ============================================================
@@ -96,25 +101,37 @@ system_state = {
 
 
 # ============================================================
-# HISTORY
+# SUPABASE & LOCAL PERSISTENCE CONFIGURATION
 # ============================================================
 
-history = []
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-MAX_HISTORY = 100
+supabase = None
+supabase_status = "not_configured"
 
-# ============================================================
-# REAL HARDWARE CONNECTION
-# ============================================================
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        from supabase import create_client
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        supabase_status = "configured"
+        print("Supabase client initialized with endpoint:", SUPABASE_URL)
+    except Exception as exc:
+        print("Supabase client initialization failed:", exc)
+        supabase_status = "initialization_failed"
+
+MAX_HISTORY = 1000
+HARDWARE_TIMEOUT = 60  # Seconds before hardware telemetry is considered stale
 hardware_last_seen = 0.0
-HARDWARE_TIMEOUT = 30
 
-# Last valid REAL hardware stability assessment.
-# This is deliberately separate from the current/live assessment so that
-# disconnecting the ESP32 does not erase the last valid SSI/MSI/FSI values.
+HISTORY_FILE = Path(__file__).with_name("smartfarm_history.json")
 LAST_KNOWN_STABILITY_FILE = Path(__file__).with_name("smartfarm_last_known_stability.json")
+LAST_KNOWN_TELEMETRY_FILE = Path(__file__).with_name("smartfarm_last_known_telemetry.json")
+
 last_known_hardware_stability = None
 last_known_hardware_stability_timestamp = None
+last_known_hardware_telemetry = None
+last_known_hardware_telemetry_timestamp = None
 
 def load_last_known_hardware_stability():
     global last_known_hardware_stability, last_known_hardware_stability_timestamp
@@ -140,7 +157,197 @@ def save_last_known_hardware_stability(stability, timestamp):
     except Exception as exc:
         print("Could not save last-known stability:", exc)
 
+def load_last_known_hardware_telemetry():
+    global last_known_hardware_telemetry, last_known_hardware_telemetry_timestamp
+    try:
+        if LAST_KNOWN_TELEMETRY_FILE.exists():
+            saved = json.loads(LAST_KNOWN_TELEMETRY_FILE.read_text(encoding="utf-8"))
+            telemetry = saved.get("telemetry")
+            if isinstance(telemetry, dict):
+                last_known_hardware_telemetry = telemetry
+                last_known_hardware_telemetry_timestamp = saved.get("timestamp")
+    except Exception as exc:
+        print("Could not load last-known telemetry:", exc)
+
+def save_last_known_hardware_telemetry(telemetry, timestamp):
+    global last_known_hardware_telemetry, last_known_hardware_telemetry_timestamp
+    last_known_hardware_telemetry = dict(telemetry)
+    last_known_hardware_telemetry_timestamp = timestamp
+    try:
+        LAST_KNOWN_TELEMETRY_FILE.write_text(
+            json.dumps({"telemetry": last_known_hardware_telemetry, "timestamp": timestamp}, indent=2),
+            encoding="utf-8"
+        )
+    except Exception as exc:
+        print("Could not save last-known telemetry:", exc)
+
+def load_history_from_file():
+    try:
+        if HISTORY_FILE.exists():
+            data = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+    except Exception as exc:
+        print("Could not load history from file:", exc)
+    return []
+
+def save_history_to_file(records):
+    try:
+        HISTORY_FILE.write_text(
+            json.dumps(records[-MAX_HISTORY:], indent=2),
+            encoding="utf-8"
+        )
+    except Exception as exc:
+        print("Could not save history to file:", exc)
+
+def save_to_supabase(record):
+    global supabase_status
+    if supabase is None:
+        return False
+    try:
+        row = {
+            "device_id": "esp32-01",
+            "soil_moisture_1": record.get("soil_moisture_1"),
+            "soil_moisture_2": record.get("soil_moisture_2"),
+            "average_soil_moisture": record.get("soil_moisture"),
+            "soil_disagreement": record.get("soil_disagreement"),
+            "temperature": record.get("temperature"),
+            "humidity": record.get("humidity"),
+            "light_lux": record.get("light"),
+            "rain_detected": record.get("rain"),
+            "rain_value": record.get("rain_raw"),
+            "voltage": record.get("bus_voltage"),
+            "current_ma": record.get("current_mA"),
+            "power_mw": record.get("power_mW"),
+            "is_valid": True,
+            "validation_flags": {
+                "source": "ESP32",
+                "adaptive_mode": record.get("adaptive_mode"),
+                "environmental_change": record.get("environmental_change"),
+            },
+            "created_at": record.get("timestamp"),
+            "environmental_change": record.get("environmental_change", False),
+            "adaptive_mode": record.get("adaptive_mode", "NORMAL"),
+            "sampling_interval": record.get("sampling_interval", 30),
+            "adaptive_reason": record.get("adaptive_reason", ""),
+            "ssi": record.get("ssi"),
+            "msi": record.get("msi"),
+            "fsi": record.get("fsi"),
+        }
+        supabase.table("sensor_readings").insert(row).execute()
+        supabase_status = "online"
+        return True
+    except Exception as exc:
+        supabase_status = "paused_or_unreachable"
+        print("Supabase save attempt (using local persistent storage fallback):", exc)
+        return False
+
+def load_history_from_supabase(limit=500):
+    global supabase_status
+    if supabase is None:
+        return []
+    try:
+        response = (
+            supabase.table("sensor_readings")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        rows = list(reversed(response.data or []))
+        records = []
+        for row in rows:
+            s1 = row.get("soil_moisture_1")
+            s2 = row.get("soil_moisture_2")
+            records.append({
+                "timestamp": row.get("created_at"),
+                "soil_moisture_1": s1,
+                "soil_moisture_2": s2,
+                "soil_moisture": row.get("average_soil_moisture") or (
+                    round((s1 + s2) / 2, 2) if s1 is not None and s2 is not None else s1
+                ),
+                "soil_disagreement": row.get("soil_disagreement"),
+                "temperature": row.get("temperature"),
+                "humidity": row.get("humidity"),
+                "light": row.get("light_lux") if row.get("light_lux") is not None else row.get("light"),
+                "rain": row.get("rain_detected") if row.get("rain_detected") is not None else row.get("rain"),
+                "rain_raw": row.get("rain_value") if row.get("rain_value") is not None else row.get("rain_raw"),
+                "bus_voltage": row.get("voltage") if row.get("voltage") is not None else row.get("bus_voltage"),
+                "current_mA": row.get("current_ma") if row.get("current_ma") is not None else row.get("current_mA"),
+                "power_mW": row.get("power_mw") if row.get("power_mw") is not None else row.get("power_mW"),
+                "environmental_change": row.get("environmental_change", False),
+                "adaptive_mode": row.get("adaptive_mode", "NORMAL"),
+                "sampling_interval": row.get("sampling_interval", 30),
+                "adaptive_reason": row.get("adaptive_reason", ""),
+                "ssi": row.get("ssi"),
+                "msi": row.get("msi"),
+                "fsi": row.get("fsi"),
+                "is_simulated": False
+            })
+        supabase_status = "online"
+        return records
+    except Exception as exc:
+        supabase_status = "paused_or_unreachable"
+        print("Supabase load attempt (falling back to local persistent storage):", exc)
+        return []
+
+# Initialize persistent state on module load
+history = load_history_from_file()
 load_last_known_hardware_stability()
+load_last_known_hardware_telemetry()
+
+# If local history file was empty, sync from Supabase
+if not history and supabase is not None:
+    initial_supabase_history = load_history_from_supabase(500)
+    if initial_supabase_history:
+        history = initial_supabase_history
+        save_history_to_file(history)
+
+# If last known real hardware telemetry was saved, initialize sensor state with it
+if last_known_hardware_telemetry:
+    system_state["sensor_data"].update(last_known_hardware_telemetry)
+    system_state["system"]["last_update"] = last_known_hardware_telemetry_timestamp
+    system_state["system"]["data_source"] = "LAST KNOWN HARDWARE"
+    system_state["system"]["hardware_status"] = "ESP32 NOT CONNECTED"
+elif len(history) > 0:
+    # Use most recent persisted history record
+    latest_hist = history[-1]
+    telemetry_fields = {
+        k: latest_hist.get(k) for k in [
+            "soil_moisture", "soil_moisture_1", "soil_moisture_2",
+            "temperature", "humidity", "light", "rain", "battery",
+            "bus_voltage", "current_mA", "power_mW"
+        ] if latest_hist.get(k) is not None
+    }
+    system_state["sensor_data"].update(telemetry_fields)
+    system_state["system"]["last_update"] = latest_hist.get("timestamp")
+    system_state["system"]["data_source"] = "LAST KNOWN HARDWARE"
+    system_state["system"]["hardware_status"] = "ESP32 NOT CONNECTED"
+    save_last_known_hardware_telemetry(telemetry_fields, latest_hist.get("timestamp"))
+
+    stability_fields = {
+        "ssi": latest_hist.get("ssi"),
+        "msi": latest_hist.get("msi"),
+        "fsi": latest_hist.get("fsi"),
+    }
+    if all(stability_fields.get(k) is not None for k in ("ssi", "msi", "fsi")):
+        system_state["farm_stability"].update(stability_fields)
+        save_last_known_hardware_stability(stability_fields, latest_hist.get("timestamp"))
+else:
+    # Clear out mock values on fresh install so empty state is genuine
+    system_state["system"]["last_update"] = None
+    system_state["system"]["data_source"] = "NO HARDWARE DATA"
+    system_state["system"]["hardware_status"] = "WAITING FOR ESP32"
+    system_state["sensor_data"] = {
+        "soil_moisture": None,
+        "soil_moisture_1": None,
+        "soil_moisture_2": None,
+        "temperature": None,
+        "humidity": None,
+        "light": None,
+        "rain": None,
+        "battery": None
+    }
 
 
 # ============================================================
@@ -854,71 +1061,61 @@ def get_state_copy():
     with state_lock:
         hardware_active = hardware_last_seen > 0 and (time.time() - hardware_last_seen) <= HARDWARE_TIMEOUT
         data_age = None if hardware_last_seen == 0 else round(max(0, time.time() - hardware_last_seen), 1)
+        has_real_records = len(history) > 0 or last_known_hardware_telemetry is not None
+
         system_copy = dict(system_state["system"])
-        system_copy["hardware_status"] = "ESP32 CONNECTED" if hardware_active else ("ESP32 NOT CONNECTED" if hardware_last_seen > 0 else "WAITING FOR ESP32")
-        system_copy["data_source"] = "REAL ESP32 HARDWARE" if hardware_active else ("LAST KNOWN HARDWARE" if hardware_last_seen > 0 else "WAITING FOR HARDWARE")
+        if system_state["system"].get("is_simulated"):
+            system_copy["hardware_status"] = "SIMULATION MODE"
+            system_copy["data_source"] = "SIMULATION"
+        elif hardware_active:
+            system_copy["hardware_status"] = "ESP32 CONNECTED"
+            system_copy["data_source"] = "REAL ESP32 HARDWARE"
+        elif has_real_records:
+            system_copy["hardware_status"] = "ESP32 NOT CONNECTED"
+            system_copy["data_source"] = "LAST KNOWN HARDWARE"
+        else:
+            system_copy["hardware_status"] = "WAITING FOR ESP32"
+            system_copy["data_source"] = "NO HARDWARE DATA"
 
         stability_copy = dict(system_state["farm_stability"])
         last_stability = None if last_known_hardware_stability is None else dict(last_known_hardware_stability)
+        last_telemetry = None if last_known_hardware_telemetry is None else dict(last_known_hardware_telemetry)
+
+        # Active sensor data: if hardware is disconnected but last known telemetry exists,
+        # provide last known telemetry so dashboard retains values
+        active_sensor_data = dict(system_state["sensor_data"])
+        if not hardware_active and last_telemetry:
+            active_sensor_data.update(last_telemetry)
+
+        timestamp_val = (
+            system_state["system"].get("last_update")
+            if hardware_active
+            else (last_known_hardware_telemetry_timestamp or system_state["system"].get("last_update"))
+        )
 
         result = {
-
             "system": system_copy,
-
-            "sensor_data":
-                dict(
-                    system_state[
-                        "sensor_data"
-                    ]
-                ),
-
-            "adaptive_decision":
-                dict(
-                    system_state[
-                        "adaptive_decision"
-                    ]
-                ),
-
+            "sensor_data": active_sensor_data,
+            "adaptive_decision": dict(system_state["adaptive_decision"]),
             "farm_stability": stability_copy,
-
             "last_known_stability": last_stability,
             "last_known_stability_timestamp": last_known_hardware_stability_timestamp,
+            "last_known_telemetry": last_telemetry,
+            "last_known_telemetry_timestamp": last_known_hardware_telemetry_timestamp,
             "connected": hardware_active,
             "data_age_seconds": data_age,
-            "timestamp": system_state["system"].get("last_update"),
-
-            "sensor_health":
-                dict(
-                    system_state[
-                        "sensor_health"
-                    ]
-                ),
-
+            "timestamp": timestamp_val,
+            "history_count": len(history),
+            "supabase_configured": bool(supabase),
+            "supabase_status": supabase_status,
+            "is_simulated": system_state["system"].get("is_simulated", False),
+            "data_source": system_copy.get("data_source"),
+            "sensor_health": dict(system_state["sensor_health"]),
             "recommendations": {
-
-                "alerts":
-                    list(
-                        system_state[
-                            "recommendations"
-                        ]["alerts"]
-                    ),
-
-                "recommendations":
-                    list(
-                        system_state[
-                            "recommendations"
-                        ]["recommendations"]
-                    )
-
+                "alerts": list(system_state["recommendations"]["alerts"]),
+                "recommendations": list(system_state["recommendations"]["recommendations"])
             },
-
-            "statistics":
-                dict(
-                    system_state[
-                        "statistics"
-                    ]
-                )
-
+            "statistics": dict(system_state["statistics"])
         }
 
         return result
@@ -1219,21 +1416,46 @@ def api_hardware_data():
 
         result = process_environment(data)
         hardware_last_seen = time.time()
+        timestamp = datetime.now(timezone.utc).isoformat()
 
-        # Persist the most recent VALID real-hardware stability assessment.
-        # It remains available after the ESP32 disconnects.
+        # Build clean persistent record
+        record = {
+            "timestamp": timestamp,
+            **data,
+            "soil_moisture": soil,
+            "soil_disagreement": round(disagreement, 2),
+            "environmental_change": result["adaptive_decision"]["environmental_change"],
+            "adaptive_mode": result["adaptive_decision"]["system_mode"],
+            "sampling_interval": next_interval,
+            "adaptive_reason": result["adaptive_decision"]["reason"],
+            "ssi": result.get("farm_stability", {}).get("ssi"),
+            "msi": result.get("farm_stability", {}).get("msi"),
+            "fsi": result.get("farm_stability", {}).get("fsi"),
+            "is_simulated": False
+        }
+
+        # Persist the most recent VALID real-hardware stability & telemetry assessments.
         stability = result.get("farm_stability", {})
-        stability_timestamp = result.get("system", {}).get("last_update")
         if all(stability.get(k) is not None for k in ("ssi", "msi", "fsi")):
-            save_last_known_hardware_stability(stability, stability_timestamp)
+            save_last_known_hardware_stability(stability, timestamp)
+        save_last_known_hardware_telemetry(data, timestamp)
 
         with state_lock:
             system_state["system"]["data_source"] = "REAL ESP32 HARDWARE"
             system_state["system"]["hardware_status"] = "ESP32 CONNECTED"
+            system_state["system"]["is_simulated"] = False
+            system_state["system"]["last_update"] = timestamp
+            history.append(record)
+            if len(history) > MAX_HISTORY:
+                del history[:-MAX_HISTORY]
+            save_history_to_file(history)
 
             if disagreement >= 15:
                 system_state["recommendations"]["alerts"].insert(0, "Soil sensor disagreement detected")
                 system_state["recommendations"]["recommendations"].insert(0, "Verify soil sensor readings and placement")
+
+        # Asynchronously save to Supabase
+        threading.Thread(target=save_to_supabase, args=(record,), daemon=True).start()
 
         next_interval = result["adaptive_decision"]["sampling_interval"]
         return jsonify({
@@ -1375,9 +1597,6 @@ def api_simulation_step():
     methods=["GET"]
 )
 def api_history():
-
-    # Frontend can request a specific number of recent records.
-    # Example: /api/history?limit=30
     try:
         limit = int(
             request.args.get("limit", MAX_HISTORY)
@@ -1385,27 +1604,35 @@ def api_history():
     except (TypeError, ValueError):
         limit = MAX_HISTORY
 
-    # Keep the requested range safe.
     limit = max(
         1,
         min(limit, MAX_HISTORY)
     )
 
-    with state_lock:
+    records = []
+    source = "local_persistent"
 
-        selected_history = history[-limit:]
+    # Attempt to load from Supabase if client is available
+    if supabase is not None:
+        supabase_records = load_history_from_supabase(limit)
+        if supabase_records:
+            records = supabase_records
+            source = "supabase"
 
-        return jsonify({
+    # Fallback to local persistent history
+    if not records:
+        with state_lock:
+            records = list(history[-limit:])
+            source = "local_persistent"
 
-            "success": True,
-
-            "count":
-                len(selected_history),
-
-            "history":
-                list(selected_history)
-
-        })
+    return jsonify({
+        "success": True,
+        "count": len(records),
+        "records": records,
+        "history": records,
+        "source": source,
+        "supabase_status": supabase_status
+    })
 
 
 # ============================================================
@@ -1765,25 +1992,6 @@ if __name__ == "__main__":
     print(
         "=" * 65
     )
-
-    # Initialize system
-
-    process_environment({
-
-        "soil_moisture": 50,
-
-        "temperature": 28,
-
-        "humidity": 65,
-
-        "light": 450,
-
-        "rain": False,
-
-        "battery": 95
-
-    })
-
 
     print("Real hardware integration mode ready. Waiting for ESP32 data...")
 

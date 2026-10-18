@@ -10,3 +10,4 @@ esp32/old_smartfarm_esp32.ino
 *backup*
 __pycache__/
 *.py[cod]
+backend/smartfarm_*.json
