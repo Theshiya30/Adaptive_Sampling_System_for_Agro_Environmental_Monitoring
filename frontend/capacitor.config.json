@@ -1,0 +1,19 @@
+{
+  "appId": "com.smartfarm.agro",
+  "appName": "SmartFarm",
+  "webDir": "dist",
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_icon_config_sample",
+      "iconColor": "#63D471"
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#0b0f0d"
+    }
+  },
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  }
+}

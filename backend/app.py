@@ -51,9 +51,11 @@ system_state = {
 
         "context": "NORMAL",
         "environmental_change": 0.0,
-        "sampling_interval": 120,
+        "sampling_interval": 30,
         "system_mode": "NORMAL",
-        "reason": "Normal environmental monitoring"
+        "adaptive_mode": "NORMAL",
+        "reason": "Environmental readings normal and stable (30s sampling interval)",
+        "adaptive_reason": "Environmental readings normal and stable (30s sampling interval)"
     },
 
     "farm_stability": {
@@ -379,59 +381,134 @@ def safe_float(value, default=0.0):
 
 
 # ============================================================
-# ENVIRONMENTAL CHANGE
+# ADAPTIVE SAMPLING ENGINE
 # ============================================================
+NORMAL_INTERVAL = 30
+ADAPTIVE_INTERVAL = 20
+RAPID_INTERVAL = 10
+VERIFICATION_INTERVAL = 10
+
+previous_sensor_data = None
+
+def evaluate_adaptive_sampling(current, previous=None):
+    """
+    Evaluates real environmental telemetry dynamics between consecutive readings.
+    - Drastic changes: accelerates to RAPID (10s)
+    - Moderate changes: adjusts to ADAPTIVE (20s)
+    - Stable conditions: returns to NORMAL (30s)
+    - Disagreement between dual soil probes: VERIFICATION (10s)
+    """
+    if previous is None:
+        return {
+            "mode": "NORMAL",
+            "interval": NORMAL_INTERVAL,
+            "change": 0.0,
+            "reason": "Environmental readings normal and stable (30s sampling interval)"
+        }
+
+    s1 = safe_float(current.get("soil_moisture_1"))
+    s2 = safe_float(current.get("soil_moisture_2"))
+    ps1 = safe_float(previous.get("soil_moisture_1"))
+    ps2 = safe_float(previous.get("soil_moisture_2"))
+
+    # Dual sensor disagreement verification
+    disagreement = abs(s1 - s2) if (s1 is not None and s2 is not None) else 0.0
+    if disagreement >= 20.0:
+        return {
+            "mode": "VERIFICATION",
+            "interval": VERIFICATION_INTERVAL,
+            "change": round(disagreement / 2.0, 2),
+            "reason": f"Dual soil sensor disagreement ({disagreement:.1f}%) requires verification"
+        }
+
+    soil_curr = safe_float(current.get("soil_moisture"))
+    soil_prev = safe_float(previous.get("soil_moisture"))
+    soil_diff = abs(soil_curr - soil_prev) if (soil_curr is not None and soil_prev is not None) else 0.0
+    if s1 is not None and ps1 is not None and s2 is not None and ps2 is not None:
+        soil_diff = max(soil_diff, abs(s1 - ps1), abs(s2 - ps2))
+
+    temp_curr = safe_float(current.get("temperature"))
+    temp_prev = safe_float(previous.get("temperature"))
+    temp_diff = abs(temp_curr - temp_prev) if (temp_curr is not None and temp_prev is not None) else 0.0
+
+    hum_curr = safe_float(current.get("humidity"))
+    hum_prev = safe_float(previous.get("humidity"))
+    hum_diff = abs(hum_curr - hum_prev) if (hum_curr is not None and hum_prev is not None) else 0.0
+
+    light_curr = safe_float(current.get("light"))
+    light_prev = safe_float(previous.get("light"))
+    light_diff = abs(light_curr - light_prev) if (light_curr is not None and light_prev is not None) else 0.0
+
+    rain_curr = bool(current.get("rain", False))
+    rain_prev = bool(previous.get("rain", False))
+    rain_changed = (rain_curr != rain_prev)
+
+    change_score = round(
+        (soil_diff / 5.0) + (temp_diff / 1.5) + (hum_diff / 8.0) + (light_diff / 100.0) + (3.0 if rain_changed else 0.0),
+        2
+    )
+
+    # 1. Drastic changes -> RAPID (10s)
+    rapid_reasons = []
+    if soil_diff >= 5.0:
+        rapid_reasons.append(f"Soil moisture delta {soil_diff:.1f}%")
+    if temp_diff >= 1.5:
+        rapid_reasons.append(f"Temperature delta {temp_diff:.1f}°C")
+    if hum_diff >= 8.0:
+        rapid_reasons.append(f"Humidity delta {hum_diff:.1f}%")
+    if light_diff >= 120.0:
+        rapid_reasons.append(f"Light delta {light_diff:.0f} lux")
+    if rain_changed:
+        rapid_reasons.append("Precipitation state changed")
+
+    if rapid_reasons:
+        return {
+            "mode": "RAPID",
+            "interval": RAPID_INTERVAL,
+            "change": max(change_score, 8.0),
+            "reason": "Drastic change: " + ", ".join(rapid_reasons) + " (accelerated 10s sampling)"
+        }
+
+    # 2. Moderate changes -> ADAPTIVE (20s)
+    adaptive_reasons = []
+    if soil_diff >= 2.0:
+        adaptive_reasons.append(f"Soil moisture delta {soil_diff:.1f}%")
+    if temp_diff >= 0.6:
+        adaptive_reasons.append(f"Temperature delta {temp_diff:.1f}°C")
+    if hum_diff >= 3.0:
+        adaptive_reasons.append(f"Humidity delta {hum_diff:.1f}%")
+    if light_diff >= 40.0:
+        adaptive_reasons.append(f"Light delta {light_diff:.0f} lux")
+
+    if adaptive_reasons:
+        return {
+            "mode": "ADAPTIVE",
+            "interval": ADAPTIVE_INTERVAL,
+            "change": max(change_score, 3.5),
+            "reason": "Moderate flux: " + ", ".join(adaptive_reasons) + " (20s adaptive sampling)"
+        }
+
+    # 3. Normal & stable -> NORMAL (30s)
+    return {
+        "mode": "NORMAL",
+        "interval": NORMAL_INTERVAL,
+        "change": change_score,
+        "reason": "Environmental readings normal and stable (30s sampling interval)"
+    }
+
 
 def calculate_environmental_change(data):
-    soil = safe_float(data.get("soil_moisture", 50))
-    temperature = safe_float(data.get("temperature", 28))
-    humidity = safe_float(data.get("humidity", 65))
-    light_raw = data.get("light", None)
-    rain = bool(data.get("rain", False))
+    global previous_sensor_data
+    decision = evaluate_adaptive_sampling(data, previous_sensor_data)
+    return decision["change"]
 
-    change = 0.0
-    change += abs(soil - 50) / 10
-    change += abs(temperature - 28) / 5
-    change += abs(humidity - 65) / 10
-
-    # Light is optional until the BH1750/GY302 is installed.
-    if light_raw is not None:
-        light = safe_float(light_raw, 450)
-        change += abs(light - 450) / 150
-
-    if rain:
-        change += 2
-
-    return round(change, 2)
-
-
-# ============================================================
-# ADAPTIVE SAMPLING INTERVAL
-# ============================================================
 
 def calculate_sampling_interval(change):
-
-    if change >= 8:
-
-        return 10
-
-
-    if change >= 6:
-
-        return 20
-
-
-    if change >= 4:
-
-        return 30
-
-
-    if change >= 2:
-
-        return 60
-
-
-    return 120
+    if change >= 8.0:
+        return RAPID_INTERVAL
+    if change >= 3.0:
+        return ADAPTIVE_INTERVAL
+    return NORMAL_INTERVAL
 
 
 # ============================================================
@@ -637,17 +714,10 @@ def determine_context(
 # ============================================================
 
 def determine_system_mode(interval):
-
-    if interval <= 20:
-
-        return "HIGH FREQUENCY"
-
-
-    if interval <= 60:
-
+    if interval <= 15:
+        return "RAPID"
+    if interval <= 25:
         return "ADAPTIVE"
-
-
     return "NORMAL"
 
 # ============================================================
@@ -1012,13 +1082,19 @@ def process_environment(data):
         "power_mW": data.get("power_mW")
     }
 
-    change = calculate_environmental_change(sensor_data)
-    interval = calculate_sampling_interval(change)
+    global previous_sensor_data
+    decision = evaluate_adaptive_sampling(sensor_data, previous_sensor_data)
+    previous_sensor_data = dict(sensor_data)
+
+    change = decision["change"]
+    interval = decision["interval"]
+    mode = decision["mode"]
+    reason = decision["reason"]
+
     ssi = calculate_ssi(soil)
     msi = calculate_msi(temperature, humidity, light, rain)
     fsi = int(round((ssi + msi) / 2))
     context = determine_context(soil, temperature, humidity, rain, change)
-    mode = determine_system_mode(interval)
 
     with state_lock:
         system_state["sensor_data"] = sensor_data
@@ -1027,7 +1103,10 @@ def process_environment(data):
             "environmental_change": change,
             "sampling_interval": interval,
             "system_mode": mode,
-            "reason": "Environmental conditions require increased monitoring" if interval <= 30 else "Normal adaptive monitoring"
+            "adaptive_mode": mode,
+            "mode": mode,
+            "reason": reason,
+            "adaptive_reason": reason
         }
         system_state["farm_stability"] = {
             "ssi": ssi, "msi": msi, "fsi": fsi,
@@ -1111,6 +1190,9 @@ def get_state_copy():
             "is_simulated": system_state["system"].get("is_simulated", False),
             "data_source": system_copy.get("data_source"),
             "sensor_health": dict(system_state["sensor_health"]),
+            "adaptive_mode": system_state["adaptive_decision"].get("adaptive_mode") or system_state["adaptive_decision"].get("system_mode", "NORMAL"),
+            "sampling_interval": system_state["adaptive_decision"].get("sampling_interval", 30),
+            "adaptive_reason": system_state["adaptive_decision"].get("reason", "Normal agro-environmental monitoring"),
             "recommendations": {
                 "alerts": list(system_state["recommendations"]["alerts"]),
                 "recommendations": list(system_state["recommendations"]["recommendations"])
@@ -1417,6 +1499,9 @@ def api_hardware_data():
         result = process_environment(data)
         hardware_last_seen = time.time()
         timestamp = datetime.now(timezone.utc).isoformat()
+        next_interval = result["adaptive_decision"]["sampling_interval"]
+        adaptive_mode = result["adaptive_decision"].get("adaptive_mode") or result["adaptive_decision"].get("system_mode", "NORMAL")
+        adaptive_reason = result["adaptive_decision"].get("adaptive_reason") or result["adaptive_decision"].get("reason", "Normal monitoring")
 
         # Build clean persistent record
         record = {
@@ -1425,9 +1510,9 @@ def api_hardware_data():
             "soil_moisture": soil,
             "soil_disagreement": round(disagreement, 2),
             "environmental_change": result["adaptive_decision"]["environmental_change"],
-            "adaptive_mode": result["adaptive_decision"]["system_mode"],
+            "adaptive_mode": adaptive_mode,
             "sampling_interval": next_interval,
-            "adaptive_reason": result["adaptive_decision"]["reason"],
+            "adaptive_reason": adaptive_reason,
             "ssi": result.get("farm_stability", {}).get("ssi"),
             "msi": result.get("farm_stability", {}).get("msi"),
             "fsi": result.get("farm_stability", {}).get("fsi"),
@@ -1835,118 +1920,86 @@ def apply_scenario(
 # ============================================================
 
 simulation_running = True
+simulation_step_counter = 0
 
 
 def simulation_loop():
-
-    # The simulator now follows the adaptive sampling interval
-    # calculated by the existing adaptive algorithm.
-    #
-    # Example:
-    # environmental change >= 8  -> 10 sec
-    # environmental change >= 6  -> 20 sec
-    # environmental change >= 4  -> 30 sec
-    # environmental change >= 2  -> 60 sec
-    # otherwise                   -> 120 sec
+    """
+    Background simulation worker that keeps telemetry active when physical ESP32 is offline.
+    - Demonstrates dynamic adaptive transitions:
+      * Normal stable conditions: small drift -> NORMAL mode, 30s sampling interval
+      * Drastic environmental changes: sudden moisture drop/surge, temp spike, or rain -> RAPID mode, 10s sampling interval
+      * Once drastic event stabilizes -> smoothly returns to NORMAL (30s)
+    - Automatically pauses whenever real ESP32 hardware transmits data.
+    """
+    global simulation_step_counter
 
     while simulation_running:
-
         try:
-
-            # Once real ESP32 data has arrived recently, completely pause
-            # the simulator so it cannot overwrite hardware readings.
+            # If real ESP32 data arrived recently, pause simulator so hardware readings prevail
             if (time.time() - hardware_last_seen) <= HARDWARE_TIMEOUT:
                 time.sleep(1)
                 continue
 
             with state_lock:
+                system_state["system"]["is_simulated"] = True
+                current = dict(system_state["sensor_data"])
 
-                current = dict(
-                    system_state[
-                        "sensor_data"
-                    ]
-                )
+            simulation_step_counter += 1
 
-            # Create the next simulated sensor reading.
-            # These small variations make the trend graphs move
-            # naturally instead of jumping unrealistically.
+            soil_base = safe_float(current.get("soil_moisture"), 50.0)
+            temp_base = safe_float(current.get("temperature"), 28.0)
+            hum_base = safe_float(current.get("humidity"), 65.0)
+            light_base = safe_float(current.get("light"), 450.0)
+            battery_base = safe_float(current.get("battery"), 95.0)
 
-            new_data = {
+            # Check if this cycle triggers a drastic environmental event (every 5th step)
+            is_drastic_event = (simulation_step_counter > 1 and simulation_step_counter % 5 == 0)
 
-                "soil_moisture":
-                    clamp(
-                        current["soil_moisture"]
-                        + random.uniform(-1.5, 1.5),
-                        0,
-                        100
-                    ),
+            if is_drastic_event:
+                # Drastic change: sudden soil moisture delta (+/-6.8%) or temp delta (+/-2.2°C) or rain onset
+                rain_toggle = random.choice([True, False]) if current.get("rain") is False else False
+                soil_swing = random.choice([-6.8, 6.5])
+                temp_swing = random.choice([-2.0, 2.2])
 
-                "temperature":
-                    clamp(
-                        current["temperature"]
-                        + random.uniform(-0.5, 0.5),
-                        0,
-                        50
-                    ),
+                new_data = {
+                    "soil_moisture": clamp(soil_base + soil_swing, 15, 90),
+                    "temperature": clamp(temp_base + temp_swing, 18, 42),
+                    "humidity": clamp(hum_base + random.uniform(-8.5, 8.5), 25, 95),
+                    "light": clamp(light_base + random.uniform(-130, 130), 50, 950),
+                    "rain": rain_toggle,
+                    "battery": clamp(battery_base - 0.05, 10, 100),
+                    "soil_moisture_1": None,
+                    "soil_moisture_2": None,
+                    "soil_disagreement": 0.0
+                }
+            else:
+                # Normal stable conditions: minimal natural drift (well below drastic thresholds)
+                new_data = {
+                    "soil_moisture": clamp(soil_base + random.uniform(-0.4, 0.4), 15, 90),
+                    "temperature": clamp(temp_base + random.uniform(-0.15, 0.15), 18, 42),
+                    "humidity": clamp(hum_base + random.uniform(-0.4, 0.4), 25, 95),
+                    "light": clamp(light_base + random.uniform(-8, 8), 50, 950),
+                    "rain": False,
+                    "battery": clamp(battery_base - 0.01, 10, 100),
+                    "soil_moisture_1": None,
+                    "soil_moisture_2": None,
+                    "soil_disagreement": 0.0
+                }
 
-                "humidity":
-                    clamp(
-                        current["humidity"]
-                        + random.uniform(-1.0, 1.0),
-                        0,
-                        100
-                    ),
+            # Process through the adaptive sampling pipeline
+            result = process_environment(new_data)
 
-                "light":
-                    clamp(
-                        current["light"]
-                        + random.uniform(-20, 20),
-                        0,
-                        1000
-                    ),
-
-                "rain":
-                    current["rain"],
-
-                "battery":
-                    current["battery"]
-            }
-
-            # Run the complete adaptive processing pipeline.
-            process_environment(new_data)
-
-            # Read the NEW adaptive sampling interval after
-            # processing this reading.
             with state_lock:
-
                 next_interval = int(
-                    system_state[
-                        "adaptive_decision"
-                    ].get(
-                        "sampling_interval",
-                        120
-                    )
+                    system_state["adaptive_decision"].get("sampling_interval", 30)
                 )
 
-            # Wait according to the adaptive algorithm.
-            # This replaces the previous hard-coded 10-second wait.
-            time.sleep(
-                max(
-                    1,
-                    next_interval
-                )
-            )
+            # Sleep for the adaptive sampling interval (10s when RAPID, 30s when NORMAL)
+            time.sleep(max(1, next_interval))
 
         except Exception as exc:
-
-            # Keep the simulator alive if one iteration fails.
-            print(
-                "Simulation error:",
-                exc
-            )
-
-            # Retry after a short delay instead of spinning
-            # continuously on an error.
+            print("Simulation loop error:", exc)
             time.sleep(2)
 
 
@@ -1955,54 +2008,25 @@ def simulation_loop():
 # ============================================================
 
 if __name__ == "__main__":
-
     print()
-    print(
-        "=" * 65
-    )
-
-    print(
-        "SMART FARM ADAPTIVE MONITORING SYSTEM"
-    )
-
-    print(
-        "PHASE 2 BACKEND"
-    )
-
-    print(
-        "=" * 65
-    )
-
-    print(
-        "Hardware integration backend starting..."
-    )
-
-    print(
-        "ESP32 hardware integration: ENABLED"
-    )
-
-    print(
-        "Dashboard: http://127.0.0.1:5000"
-    )
-
-    print(
-        "Simulator: http://127.0.0.1:5000/simulator"
-    )
-
-    print(
-        "=" * 65
-    )
-
+    print("=" * 65)
+    print("SMART FARM ADAPTIVE MONITORING SYSTEM")
+    print("PHASE 2 BACKEND")
+    print("=" * 65)
+    print("Hardware integration backend starting...")
+    print("ESP32 hardware integration: ENABLED")
+    print("Dashboard: http://127.0.0.1:5000")
+    print("Simulator: http://127.0.0.1:5000/simulator")
+    print("=" * 65)
     print("Real hardware integration mode ready. Waiting for ESP32 data...")
 
+    # Start simulation loop in background thread when no hardware is transmitting
+    sim_thread = threading.Thread(target=simulation_loop, daemon=True)
+    sim_thread.start()
+
     app.run(
-
         host="0.0.0.0",
-
         port=5000,
-
-        debug=True,
-
+        debug=False,
         use_reloader=False
-
-    )
+    )

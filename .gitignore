@@ -11,3 +11,5 @@ esp32/old_smartfarm_esp32.ino
 __pycache__/
 *.py[cod]
 backend/smartfarm_*.json
+frontend/android/
+frontend/public/generate_icons.py

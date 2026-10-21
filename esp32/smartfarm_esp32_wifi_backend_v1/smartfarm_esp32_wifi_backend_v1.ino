@@ -17,7 +17,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <DHT.h>
+#include <DHT.h> 
 #include <Wire.h>
 #include <BH1750.h>
 #include <Adafruit_INA219.h>

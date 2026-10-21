@@ -2,8 +2,13 @@ import { useEffect, useState, useRef } from "react";
 import axios from "axios";
 import * as THREE from "three";
 import UIEnhancements from "./UIEnhancements";
-const API_BASE_URL =
-    import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
+const getApiBaseUrl = () => {
+    if (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
+        return "http://localhost:5000";
+    }
+    return import.meta.env.VITE_API_BASE_URL || "https://smartfarm-backend-w3x0.onrender.com";
+};
+const API_BASE_URL = getApiBaseUrl();
 
 import {
     Activity,
@@ -19,6 +24,8 @@ import {
     Sun,
     Moon,
     FileDown,
+    Download,
+    Smartphone,
     AlertTriangle,
     ShieldCheck,
     Check,
@@ -54,9 +61,23 @@ import {
     getDialLink,
     getWhatsAppLink,
     getSmsLink,
-    requestNotificationPermission,
     sendDesktopNotification,
+    initNativeMobileFeatures,
+    unlockAudio,
+    acknowledgeAlert,
+    unacknowledgeAlert,
+    isAlertAcknowledged,
+    getAlertRemainingSnoozeSeconds,
+    getAlertKey,
+    SNOOZE_DURATION_MS,
 } from "./alertNotificationService";
+
+import {
+    MobileTopBar,
+    MobileBottomNav,
+    InstallAppPrompt,
+    InstallAppModal,
+} from "./MobileAppShell";
 
 import {
     ResponsiveContainer,
@@ -135,7 +156,8 @@ function App() {
     const [voiceEnabled, setVoiceEnabledState] = useState(() => isVoiceEnabled());
     const [farmerContact, setFarmerContactState] = useState(() => getFarmerContact());
     const [activeToastAlert, setActiveToastAlert] = useState(null);
-    const lastAlertKeyRef = useRef("");
+    const notifiedAlertKeysRef = useRef(new Set());
+    const hasAttemptedFetchRef = useRef(false);
 
     const handleToggleSound = () => {
         const next = !soundEnabled;
@@ -157,6 +179,27 @@ function App() {
         }
     };
 
+    const [ackVersion, setAckVersion] = useState(0);
+
+    const handleAcknowledgeAlert = (alert) => {
+        stopSpeaking();
+        if (alert) {
+            const key = getAlertKey(alert);
+            acknowledgeAlert(key);
+            setAckVersion((v) => v + 1);
+        }
+        setActiveToastAlert(null);
+    };
+
+    const handleUnacknowledgeAlert = (alert) => {
+        if (alert) {
+            const key = getAlertKey(alert);
+            unacknowledgeAlert(key);
+            notifiedAlertKeysRef.current.delete(key);
+            setAckVersion((v) => v + 1);
+        }
+    };
+
     const handleUpdateFarmer = (updated) => {
         setFarmerContactState(updated);
         saveFarmerContact(updated);
@@ -175,12 +218,45 @@ function App() {
         setTheme((prev) => (prev === "dark" ? "light" : "dark"));
     };
 
+    const [installPromptEvent, setInstallPromptEvent] = useState(null);
+    const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
+
+    // Initialize native mobile features (Capacitor status bar & notification channels)
+    // and PWA install prompt handler
+    useEffect(() => {
+        initNativeMobileFeatures();
+
+        const handleBeforeInstallPrompt = (e) => {
+            e.preventDefault();
+            setInstallPromptEvent(e);
+        };
+
+        const handleAppInstalled = () => {
+            setInstallPromptEvent(null);
+            console.log("[SmartFarm PWA] Installed to home screen successfully!");
+        };
+
+        window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+        window.addEventListener("appinstalled", handleAppInstalled);
+
+        return () => {
+            window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+            window.removeEventListener("appinstalled", handleAppInstalled);
+        };
+    }, []);
+
     useEffect(() => {
         const fetchHistory = async () => {
             try {
-                const response = await axios.get(
-                    `${API_BASE_URL}/api/history?limit=500`
-                );
+                let response;
+                try {
+                    response = await axios.get(`${API_BASE_URL}/api/history?limit=500`, { timeout: 3500 });
+                } catch (e) {
+                    const fallback = API_BASE_URL === "http://localhost:5000"
+                        ? "https://smartfarm-backend-w3x0.onrender.com"
+                        : "http://localhost:5000";
+                    response = await axios.get(`${fallback}/api/history?limit=500`, { timeout: 4000 });
+                }
                 const records = Array.isArray(response.data?.records)
                     ? response.data.records
                     : Array.isArray(response.data?.history)
@@ -207,10 +283,15 @@ function App() {
         const fetchLiveData = async () => {
 
             try {
-
-                const response = await axios.get(
-                    `${API_BASE_URL}/api/status`
-                );
+                let response;
+                try {
+                    response = await axios.get(`${API_BASE_URL}/api/status`, { timeout: 3500 });
+                } catch (e) {
+                    const fallback = API_BASE_URL === "http://localhost:5000"
+                        ? "https://smartfarm-backend-w3x0.onrender.com"
+                        : "http://localhost:5000";
+                    response = await axios.get(`${fallback}/api/status`, { timeout: 4000 });
+                }
 
                 const raw = response.data;
 
@@ -221,11 +302,45 @@ function App() {
                 const stability = raw.farm_stability || {};
                 const system = raw.system || {};
 
+                // Adaptive sampling interval
+                const samplingInterval =
+                    raw.sampling_interval ??
+                    adaptive.sampling_interval ??
+                    raw.next_sampling_interval ??
+                    null;
+
+                // Adaptive mode (derive from sampling interval if not explicitly provided)
+                let adaptiveMode =
+                    raw.adaptive_mode ||
+                    adaptive.adaptive_mode ||
+                    adaptive.system_mode ||
+                    raw.system_mode ||
+                    raw.mode ||
+                    adaptive.mode ||
+                    null;
+
+                if (!adaptiveMode && samplingInterval !== null) {
+                    const intVal = Number(samplingInterval);
+                    if (intVal <= 20) adaptiveMode = "RAPID";
+                    else if (intVal <= 60) adaptiveMode = "ADAPTIVE";
+                    else adaptiveMode = "NORMAL";
+                }
+
+                const adaptiveReason =
+                    raw.adaptive_reason ||
+                    adaptive.adaptive_reason ||
+                    adaptive.reason ||
+                    raw.reason ||
+                    null;
+
                 const data = {
                     ...raw,
                     ...sensorData,
                     ...adaptive,
                     ...stability,
+                    sampling_interval: samplingInterval,
+                    adaptive_mode: adaptiveMode,
+                    adaptive_reason: adaptiveReason,
                     timestamp: raw.timestamp || system.last_update || null,
                     connected: raw.connected === true,
                     data_age_seconds: raw.data_age_seconds ?? null,
@@ -247,6 +362,8 @@ function App() {
 
                 setBackendConnected(false);
 
+            } finally {
+                hasAttemptedFetchRef.current = true;
             }
 
         };
@@ -411,25 +528,113 @@ function App() {
         (a) => a.severity === "CRITICAL" || a.severity === "WARNING"
     ).length;
 
-    // Automatic Urgent Alert Audio & Notification Trigger
+    // Automatic Urgent Alert Audio & Notification Trigger (respects 5-minute acknowledgment snooze)
     useEffect(() => {
-        requestNotificationPermission();
-        const urgent = realAlerts.find((a) => a.severity === "CRITICAL" || a.severity === "WARNING");
-        if (urgent) {
-            const key = `${urgent.title}_${urgent.severity}_${urgent.reason}`;
-            if (key !== lastAlertKeyRef.current) {
-                lastAlertKeyRef.current = key;
-                setActiveToastAlert(urgent);
-                if (soundEnabled) {
-                    playAlertSound(urgent.severity);
-                }
-                if (voiceEnabled && urgent.severity === "CRITICAL") {
-                    speakAlertVoice(urgent, farmerContact.name);
-                }
-                sendDesktopNotification(urgent);
+        // Avoid false alarm before initial fetch has finished attempting connection
+        if (!hasAttemptedFetchRef.current && !backendConnected) {
+            return;
+        }
+
+        const urgentAlerts = realAlerts.filter(
+            (a) => a.severity === "CRITICAL" || a.severity === "WARNING"
+        );
+
+        // Filter out alerts that have been acknowledged (within the 5-minute snooze period)
+        const unacknowledgedUrgent = urgentAlerts.filter((a) => {
+            const key = getAlertKey(a);
+            return !isAlertAcknowledged(key);
+        });
+
+        // Find active unacknowledged urgent alerts that haven't been notified yet
+        const newUrgentAlerts = unacknowledgedUrgent.filter((a) => {
+            const key = getAlertKey(a);
+            return !notifiedAlertKeysRef.current.has(key);
+        });
+
+        if (newUrgentAlerts.length > 0) {
+            // Register these alerts in notified set
+            newUrgentAlerts.forEach((a) => {
+                const key = getAlertKey(a);
+                notifiedAlertKeysRef.current.add(key);
+            });
+
+            // Priority: select the most urgent alert for immediate toast / modal
+            const primaryAlert =
+                newUrgentAlerts.find((a) => a.severity === "CRITICAL") ||
+                newUrgentAlerts[0];
+
+            setActiveToastAlert(primaryAlert);
+
+            // Audio Alert with sound
+            if (soundEnabled) {
+                playAlertSound(primaryAlert.severity);
+            }
+
+            // Voice Alert
+            if (voiceEnabled && primaryAlert.severity === "CRITICAL") {
+                speakAlertVoice(primaryAlert, farmerContact.name);
+            }
+
+            // Desktop / Mobile Push Notification
+            newUrgentAlerts.forEach((a) => sendDesktopNotification(a));
+        }
+
+        // Clean up resolved alerts from notified set and acknowledgment map so recurrence alerts again
+        const activeKeys = new Set(urgentAlerts.map(getAlertKey));
+        for (const key of notifiedAlertKeysRef.current) {
+            if (!activeKeys.has(key)) {
+                notifiedAlertKeysRef.current.delete(key);
+                unacknowledgeAlert(key);
             }
         }
-    }, [realAlerts, soundEnabled, voiceEnabled, farmerContact]);
+
+        // If the condition that triggered active toast alert has resolved, dismiss it automatically
+        if (activeToastAlert) {
+            const activeToastKey = getAlertKey(activeToastAlert);
+            if (!activeKeys.has(activeToastKey)) {
+                setActiveToastAlert(null);
+                stopSpeaking();
+            }
+        }
+    }, [realAlerts, backendConnected, soundEnabled, voiceEnabled, farmerContact, ackVersion, activeToastAlert]);
+
+    // Check for expired 5-minute snoozes to trigger the NEXT alert if issue remains unresolved
+    useEffect(() => {
+        const snoozeChecker = setInterval(() => {
+            const urgentAlerts = realAlerts.filter(
+                (a) => a.severity === "CRITICAL" || a.severity === "WARNING"
+            );
+            let expiredCount = 0;
+            urgentAlerts.forEach((a) => {
+                const key = getAlertKey(a);
+                // If 5-minute snooze expired and issue is STILL active, reset notified key so next alert fires
+                if (!isAlertAcknowledged(key) && notifiedAlertKeysRef.current.has(key)) {
+                    notifiedAlertKeysRef.current.delete(key);
+                    expiredCount++;
+                }
+            });
+            if (expiredCount > 0) {
+                setAckVersion((v) => v + 1);
+            }
+        }, 3000);
+
+        return () => clearInterval(snoozeChecker);
+    }, [realAlerts]);
+
+    // Alert audio reminder: repeats every 20 seconds ONLY until acknowledged
+    useEffect(() => {
+        if (!activeToastAlert || !soundEnabled) return;
+        const key = getAlertKey(activeToastAlert);
+        if (isAlertAcknowledged(key)) return;
+
+        const reminderInterval = setInterval(() => {
+            if (!isAlertAcknowledged(key) && soundEnabled) {
+                playAlertSound(activeToastAlert.severity);
+            }
+        }, 20000);
+
+        return () => clearInterval(reminderInterval);
+    }, [activeToastAlert, soundEnabled, ackVersion]);
 
 
     return (
@@ -543,6 +748,28 @@ function App() {
           }
         }
       `}</style>
+
+            <MobileTopBar
+                activePage={activePage}
+                setActivePage={setActivePage}
+                hardwareStatus={hardwareStatus}
+                theme={theme}
+                toggleTheme={toggleTheme}
+                farmerContact={farmerContact}
+                activeAlertsCount={activeAlertsCount}
+                onOpenNotifications={() => {
+                    const fab = document.querySelector(".notif-bell-btn, .notification-center-fab");
+                    if (fab) fab.click();
+                }}
+                onOpenPdfModal={() => setIsPdfModalOpen(true)}
+                onTriggerInstall={() => {
+                    if (installPromptEvent) {
+                        installPromptEvent.prompt();
+                    } else {
+                        setIsInstallModalOpen(true);
+                    }
+                }}
+            />
 
             {/* =================================================
           SIDEBAR
@@ -668,6 +895,15 @@ function App() {
                     </div>
 
 
+                    <button
+                        className="sidebar-install-btn"
+                        onClick={() => setIsInstallModalOpen(true)}
+                        title="Install SmartFarm as an application on your phone or PC"
+                    >
+                        <Download size={16} />
+                        <span>Install App</span>
+                    </button>
+
                     <button className="settings-button">
 
                         <Settings size={17} />
@@ -706,6 +942,21 @@ function App() {
 
 
                     <div className="topbar-actions">
+
+                        <button
+                            className="install-app-topbar-btn"
+                            onClick={() => {
+                                if (installPromptEvent) {
+                                    installPromptEvent.prompt();
+                                } else {
+                                    setIsInstallModalOpen(true);
+                                }
+                            }}
+                            title="Install SmartFarm as a mobile or desktop application"
+                        >
+                            <Smartphone size={15} />
+                            <span>Install App</span>
+                        </button>
 
                         <button
                             className="pdf-report-btn"
@@ -820,6 +1071,9 @@ function App() {
                         onToggleSound={handleToggleSound}
                         onToggleVoice={handleToggleVoice}
                         onUpdateFarmer={handleUpdateFarmer}
+                        ackVersion={ackVersion}
+                        onAcknowledge={handleAcknowledgeAlert}
+                        onUnacknowledge={handleUnacknowledgeAlert}
                     />
                 )}
 
@@ -836,7 +1090,30 @@ function App() {
             <AlertPopupToast
                 alert={activeToastAlert}
                 farmerContact={farmerContact}
-                onDismiss={() => setActiveToastAlert(null)}
+                onAcknowledge={handleAcknowledgeAlert}
+                onDismiss={() => {
+                    stopSpeaking();
+                    setActiveToastAlert(null);
+                }}
+            />
+
+            <NotificationCenter alerts={realAlerts} />
+
+            <MobileBottomNav
+                activePage={activePage}
+                setActivePage={setActivePage}
+                activeAlertsCount={activeAlertsCount}
+            />
+
+            <InstallAppPrompt
+                onOpenModal={() => setIsInstallModalOpen(true)}
+            />
+
+            <InstallAppModal
+                isOpen={isInstallModalOpen}
+                onClose={() => setIsInstallModalOpen(false)}
+                installPromptEvent={installPromptEvent}
+                onInstalled={() => setInstallPromptEvent(null)}
             />
 
         </div>
@@ -1081,6 +1358,135 @@ function LivePage({
         return "NO DATA";
     };
 
+    // Dynamic client-side environmental delta tracker
+    const prevTelemetryRef = useRef(null);
+    const [clientDrasticEvent, setClientDrasticEvent] = useState(null);
+
+    useEffect(() => {
+        if (!liveData) return;
+        const currentSoil = Number(liveData.soil_moisture ?? liveData.soil_moisture_1);
+        const currentTemp = Number(liveData.temperature);
+        const currentHum = Number(liveData.humidity);
+        const currentLight = liveData.light !== null && liveData.light !== undefined ? Number(liveData.light) : null;
+        const currentRain = Boolean(liveData.rain);
+
+        if (isNaN(currentSoil) && isNaN(currentTemp)) return;
+
+        const prev = prevTelemetryRef.current;
+        if (prev) {
+            const soilDelta = !isNaN(currentSoil) && !isNaN(prev.soil) ? Math.abs(currentSoil - prev.soil) : 0;
+            const tempDelta = !isNaN(currentTemp) && !isNaN(prev.temp) ? Math.abs(currentTemp - prev.temp) : 0;
+            const humDelta = !isNaN(currentHum) && !isNaN(prev.hum) ? Math.abs(currentHum - prev.hum) : 0;
+            const lightDelta = currentLight !== null && prev.light !== null ? Math.abs(currentLight - prev.light) : 0;
+            const rainChanged = prev.rain !== currentRain;
+
+            const drasticReasons = [];
+            if (soilDelta >= 5.0) drasticReasons.push(`Soil moisture delta ${soilDelta.toFixed(1)}%`);
+            if (tempDelta >= 1.5) drasticReasons.push(`Temperature delta ${tempDelta.toFixed(1)}°C`);
+            if (humDelta >= 8.0) drasticReasons.push(`Humidity delta ${humDelta.toFixed(1)}%`);
+            if (lightDelta >= 120.0) drasticReasons.push(`Light delta ${Math.round(lightDelta)} lux`);
+            if (rainChanged) drasticReasons.push(`Precipitation changed (${currentRain ? "Rain started" : "Rain stopped"})`);
+
+            if (drasticReasons.length > 0) {
+                // Accelerate immediately to RAPID (10s) upon drastic telemetry change
+                setClientDrasticEvent({
+                    mode: "RAPID",
+                    interval: 10,
+                    reason: `Drastic change: ${drasticReasons.join(", ")} (accelerated 10s sampling)`,
+                    expiresAt: Date.now() + 15000,
+                });
+            } else if (clientDrasticEvent && Date.now() > clientDrasticEvent.expiresAt) {
+                // Settle back to normal stable monitoring
+                setClientDrasticEvent(null);
+            }
+        }
+
+        prevTelemetryRef.current = {
+            soil: currentSoil,
+            temp: currentTemp,
+            hum: currentHum,
+            light: currentLight,
+            rain: currentRain,
+        };
+    }, [
+        liveData?.soil_moisture,
+        liveData?.soil_moisture_1,
+        liveData?.temperature,
+        liveData?.humidity,
+        liveData?.light,
+        liveData?.rain,
+        liveData?.timestamp
+    ]);
+
+    // Determine Adaptive Mode dynamically depending on sampling interval & telemetry
+    const getAdaptiveModeInfo = () => {
+        const intervalRaw = liveData?.sampling_interval ?? liveData?.adaptive_decision?.sampling_interval;
+        const interval = intervalRaw !== null && intervalRaw !== undefined && !isNaN(Number(intervalRaw))
+            ? Number(intervalRaw)
+            : null;
+
+        const explicitMode = (
+            liveData?.adaptive_mode ||
+            liveData?.system_mode ||
+            liveData?.mode ||
+            liveData?.adaptive_decision?.adaptive_mode ||
+            liveData?.adaptive_decision?.system_mode ||
+            liveData?.adaptive_decision?.mode ||
+            ""
+        ).toUpperCase();
+
+        const isClientDrastic = Boolean(clientDrasticEvent && Date.now() <= clientDrasticEvent.expiresAt);
+
+        // 1. Drastic environmental change -> RAPID (10s)
+        const isRapid =
+            isClientDrastic ||
+            interval === 10 ||
+            (interval !== null && interval <= 15) ||
+            explicitMode === "RAPID" ||
+            explicitMode === "HIGH FREQUENCY";
+
+        if (isRapid) {
+            const rapidInterval = interval && interval <= 15 ? interval : 10;
+            return {
+                mode: "RAPID",
+                color: "#d65f5f",
+                intervalText: `${rapidInterval} sec`,
+                reason:
+                    clientDrasticEvent?.reason ||
+                    liveData?.adaptive_reason ||
+                    liveData?.reason ||
+                    `Drastic environmental change detected (rapid ${rapidInterval}s sampling)`,
+            };
+        }
+
+        // 2. Moderate environmental flux -> ADAPTIVE (20s)
+        if (interval !== null && interval > 15 && interval < 28) {
+            return {
+                mode: "ADAPTIVE",
+                color: "#d4a84b",
+                intervalText: `${interval} sec`,
+                reason:
+                    liveData?.adaptive_reason ||
+                    liveData?.reason ||
+                    `Moderate environmental flux detected (${interval}s adaptive interval)`,
+            };
+        }
+
+        // 3. Normal & stable conditions -> NORMAL (30s)
+        const normalInterval = interval && interval >= 28 ? interval : 30;
+        return {
+            mode: "NORMAL",
+            color: "#62c87b",
+            intervalText: `${normalInterval} sec`,
+            reason:
+                liveData?.adaptive_reason ||
+                liveData?.reason ||
+                `Readings normal and stable (${normalInterval}s normal interval)`,
+        };
+    };
+
+    const adaptiveInfo = getAdaptiveModeInfo();
+
 
     return (
 
@@ -1183,24 +1589,14 @@ function LivePage({
                         <span
                             className="mode-indicator"
                             style={{
-                                background:
-                                    liveData?.adaptive_mode === "RAPID"
-                                        ? "#d65f5f"
-                                        : liveData?.adaptive_mode === "VERIFICATION"
-                                            ? "#d4a84b"
-                                            : liveData?.adaptive_mode === "ADAPTIVE"
-                                                ? "#d4a84b"
-                                                : liveData?.adaptive_mode === "NORMAL"
-                                                    ? "#62c87b"
-                                                    : "#777",
+                                background: adaptiveInfo.color,
+                                boxShadow: `0 0 10px ${adaptiveInfo.color}66`,
                             }}
                         />
 
-                        {hardwareStatus === "LIVE"
-                            ? (liveData?.adaptive_mode || "NOT AVAILABLE")
-                            : hardwareStatus === "STALE"
-                                ? "STALE DATA"
-                                : "NOT AVAILABLE"}
+                        {hardwareStatus === "STALE"
+                            ? `${adaptiveInfo.mode} (STALE)`
+                            : adaptiveInfo.mode}
 
                     </div>
 
@@ -1210,9 +1606,7 @@ function LivePage({
                         Sampling interval{" "}
 
                         <strong>
-                            {hardwareStatus === "LIVE" && liveData?.sampling_interval
-                                ? `${liveData.sampling_interval} sec`
-                                : "—"}
+                            {adaptiveInfo.intervalText}
                         </strong>
 
                     </div>
@@ -1227,11 +1621,9 @@ function LivePage({
                         }}
                     >
 
-                        {hardwareStatus === "LIVE"
-                            ? (liveData?.adaptive_reason || "Adaptive decision received")
-                            : hardwareStatus === "STALE"
-                                ? "Last adaptive decision retained; no fresh telemetry."
-                                : "Adaptive decision unavailable until hardware telemetry is received."}
+                        {hardwareStatus === "STALE"
+                            ? "Last adaptive decision retained; no fresh telemetry."
+                            : adaptiveInfo.reason}
 
                     </div>
 
@@ -4811,57 +5203,294 @@ function AnalysisSummary({
 // ALERT POPUP TOAST NOTIFICATION (HIGH ATTENTION)
 // =========================================================
 
-function AlertPopupToast({ alert, farmerContact, onDismiss }) {
+function AlertPopupToast({ alert, farmerContact, onAcknowledge, onDismiss }) {
     if (!alert) return null;
-    const isCritical = alert.severity === "CRITICAL";
 
-    return (
-        <div className={`alert-popup-toast ${isCritical ? "critical" : "warning"}`} role="alert">
-            <div className="toast-header">
-                <div className={`toast-badge ${isCritical ? "critical" : "warning"}`}>
-                    <AlertTriangle size={13} />
-                    <span>{isCritical ? "CRITICAL ALERT" : "WARNING ALERT"}</span>
+    const isCritical = alert.severity === "CRITICAL";
+    const sev = alert.severity?.toLowerCase();
+
+    if (isCritical) {
+        // === FULLSCREEN CRITICAL OVERLAY ===
+        return (
+            <div className="alert-critical-overlay" role="alertdialog" aria-modal="true" aria-label="Critical farm alert">
+                <div className={`alert-critical-card`}>
+                    <div className="alert-card-stripe" />
+                    <div className="alert-card-body">
+                        <div className="alert-card-top-row">
+                            <div className={`alert-icon-ring`}>
+                                <AlertTriangle size={30} />
+                            </div>
+                            <div className="alert-card-top-text">
+                                <div className={`alert-severity-badge critical`}>
+                                    <AlertTriangle size={10} />
+                                    🚨 CRITICAL FARM ALERT
+                                </div>
+                                <div className="alert-card-title">{alert.title}</div>
+                                <div className="alert-card-category">{alert.category}</div>
+                            </div>
+                        </div>
+
+                        {alert.reading && (
+                            <div className={`alert-reading-chip critical`}>
+                                Reading: {alert.reading}
+                            </div>
+                        )}
+
+                        <div className="alert-card-reason">{alert.reason}</div>
+
+                        {alert.recommendation && (
+                            <div className="alert-card-rec">
+                                <strong>⚡ Action:</strong>{alert.recommendation}
+                            </div>
+                        )}
+
+                        {/* PRIMARY ACTIONS — Call & WhatsApp */}
+                        <div className="alert-card-actions">
+                            <a
+                                href={getDialLink(farmerContact?.phone)}
+                                className="alert-action-btn dial"
+                                title={`Call farmer at ${farmerContact?.phone}`}
+                            >
+                                <PhoneCall size={15} />
+                                📞 Call Farmer
+                            </a>
+                            <a
+                                href={getWhatsAppLink(alert, farmerContact?.phone)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="alert-action-btn whatsapp"
+                                title="Send WhatsApp alert"
+                            >
+                                <MessageSquare size={15} />
+                                WhatsApp Alert
+                            </a>
+                        </div>
+
+                        {/* SECONDARY ACTIONS — SMS, Sound, Voice, Acknowledge */}
+                        <div className="alert-card-actions-row2">
+                            <a
+                                href={getSmsLink(alert, farmerContact?.phone)}
+                                className="alert-action-btn sms"
+                                title="Send SMS alert"
+                            >
+                                <MessageSquare size={13} />
+                                SMS Alert
+                            </a>
+                            <button
+                                type="button"
+                                className="alert-action-btn speak"
+                                onClick={() => {
+                                    unlockAudio();
+                                    playAlertSound(alert.severity);
+                                }}
+                                title="Play siren audio alarm"
+                            >
+                                <Bell size={13} />
+                                Play Siren
+                            </button>
+                            <button
+                                type="button"
+                                className="alert-action-btn speak"
+                                onClick={() => {
+                                    unlockAudio();
+                                    speakAlertVoice(alert, farmerContact?.name);
+                                }}
+                                title="Speak alert with voice"
+                            >
+                                <Volume2 size={13} />
+                                Speak Alert
+                            </button>
+                            <button
+                                type="button"
+                                className="alert-action-btn dismiss-warn"
+                                onClick={() => {
+                                    stopSpeaking();
+                                    onAcknowledge?.(alert);
+                                }}
+                                title="Acknowledge alert and snooze notifications for 5 minutes"
+                                style={{
+                                    background: "#22c55e",
+                                    color: "#051f11",
+                                    fontWeight: 700,
+                                }}
+                            >
+                                <Check size={14} />
+                                ✓ Acknowledge (5m Snooze)
+                            </button>
+                        </div>
+
+                        <div className="alert-card-footer">
+                            <span className="alert-card-timestamp">⏱ {alert.timestamp} · Requires acknowledgment</span>
+                            <button
+                                type="button"
+                                className="alert-dismiss-btn"
+                                onClick={() => {
+                                    stopSpeaking();
+                                    onDismiss?.();
+                                }}
+                            >
+                                <X size={13} /> Dismiss
+                            </button>
+                        </div>
+                    </div>
                 </div>
-                <button className="toast-btn-dismiss" onClick={onDismiss} aria-label="Dismiss alert">
+            </div>
+        );
+    }
+
+    // === COMPACT WARNING TOAST ===
+    return (
+        <div className={`alert-popup-toast ${sev}`} role="alert">
+            <div className="toast-header">
+                <div className={`toast-badge ${sev}`}>
+                    <AlertTriangle size={13} />
+                    <span>⚠ WARNING ALERT</span>
+                </div>
+                <button className="toast-btn-dismiss" onClick={() => { stopSpeaking(); onDismiss?.(); }} aria-label="Dismiss">
                     <X size={15} />
                 </button>
             </div>
-
             <div className="toast-title">{alert.title}</div>
             <div className="toast-reason">{alert.reason}</div>
-
             <div className="toast-actions">
                 <button
                     type="button"
-                    className="toast-btn toast-btn-speak"
-                    onClick={() => speakAlertVoice(alert, farmerContact?.name)}
-                    title="Speak alert with voice audio"
+                    className="toast-btn toast-btn-ack"
+                    onClick={() => {
+                        stopSpeaking();
+                        onAcknowledge?.(alert);
+                    }}
+                    title="Acknowledge warning and snooze for 5 minutes"
+                    style={{
+                        background: "rgba(98, 200, 123, 0.25)",
+                        border: "1px solid #62c87b",
+                        color: "#95e0a6",
+                        fontWeight: 700,
+                        padding: "6px 14px",
+                    }}
                 >
-                    <Volume2 size={13} />
-                    <span>Speak Alert</span>
+                    <Check size={12} />
+                    <span>✓ Acknowledge (5m)</span>
                 </button>
-
-                <a
-                    href={getDialLink(farmerContact?.phone)}
-                    className="toast-btn toast-btn-dial"
-                    title={`Call farmer at ${farmerContact?.phone || "+94771234567"}`}
-                >
-                    <PhoneCall size={13} />
-                    <span>Dial Farmer</span>
+                <a href={getDialLink(farmerContact?.phone)} className="toast-btn toast-btn-dial">
+                    <PhoneCall size={11} /><span>Call</span>
                 </a>
-
-                <a
-                    href={getWhatsAppLink(alert, farmerContact?.phone)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="toast-btn toast-btn-wa"
-                    title="Open WhatsApp with pre-filled alert text"
-                >
-                    <MessageSquare size={13} />
-                    <span>WhatsApp</span>
+                <a href={getWhatsAppLink(alert, farmerContact?.phone)} target="_blank" rel="noopener noreferrer" className="toast-btn toast-btn-wa">
+                    <MessageSquare size={11} /><span>WhatsApp</span>
                 </a>
+                <a href={getSmsLink(alert, farmerContact?.phone)} className="toast-btn toast-btn-sms">
+                    <MessageSquare size={11} /><span>SMS</span>
+                </a>
+                <button type="button" className="toast-btn toast-btn-speak" onClick={() => { unlockAudio(); playAlertSound(alert.severity); }} title="Play chime sound">
+                    <Bell size={11} /><span>Sound</span>
+                </button>
+                <button type="button" className="toast-btn toast-btn-speak" onClick={() => { unlockAudio(); speakAlertVoice(alert, farmerContact?.name); }} title="Speak voice alert">
+                    <Volume2 size={11} /><span>Voice</span>
+                </button>
+            </div>
+            <div style={{ marginTop: "10px", fontSize: "10px", color: "#6e8074", fontFamily: '"JetBrains Mono", monospace', display: "flex", justifyContent: "space-between" }}>
+                <span>Alerts until acknowledged</span>
+                <span>5-min snooze upon ack</span>
             </div>
         </div>
+    );
+}
+
+
+// =========================================================
+// NOTIFICATION CENTER (History Drawer + Bell Button)
+// =========================================================
+
+function NotificationCenter({ alerts }) {
+    const [open, setOpen] = useState(false);
+    const [history, setHistory] = useState([]);
+    const [seenCount, setSeenCount] = useState(0);
+
+    // Append new non-INFO alerts to history
+    useEffect(() => {
+        const urgent = alerts.filter((a) => a.severity === "CRITICAL" || a.severity === "WARNING");
+        if (urgent.length === 0) return;
+        setHistory((prev) => {
+            const existingIds = new Set(prev.map((h) => h.id + h.timestamp));
+            const toAdd = urgent.filter((a) => !existingIds.has(a.id + a.timestamp));
+            if (toAdd.length === 0) return prev;
+            return [...toAdd.map((a) => ({ ...a, receivedAt: new Date().toLocaleTimeString() })), ...prev].slice(0, 50);
+        });
+    }, [alerts]);
+
+    const unread = history.length - seenCount;
+
+    const handleOpen = () => {
+        setOpen(true);
+        setSeenCount(history.length);
+    };
+
+    return (
+        <>
+            {/* Floating bell button */}
+            <button
+                type="button"
+                className="notif-bell-btn"
+                onClick={() => open ? setOpen(false) : handleOpen()}
+                title="Notification history"
+                style={{ position: "relative" }}
+            >
+                <Bell size={22} />
+                {unread > 0 && (
+                    <span className="notif-badge">{unread > 9 ? "9+" : unread}</span>
+                )}
+            </button>
+
+            {/* Slide-up notification drawer */}
+            {open && (
+                <div className="notif-drawer">
+                    <div className="notif-drawer-header">
+                        <span className="notif-drawer-title">🔔 ALERT NOTIFICATION LOG</span>
+                        <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                            {history.length > 0 && (
+                                <button
+                                    type="button"
+                                    className="notif-drawer-clear"
+                                    onClick={() => { setHistory([]); setSeenCount(0); }}
+                                >
+                                    Clear All
+                                </button>
+                            )}
+                            <button
+                                type="button"
+                                className="notif-drawer-clear"
+                                onClick={() => setOpen(false)}
+                                style={{ color: "#8a9e93" }}
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+                    </div>
+                    <div className="notif-drawer-list">
+                        {history.length === 0 ? (
+                            <div className="notif-drawer-empty">
+                                <Bell size={28} style={{ marginBottom: "8px", opacity: 0.3 }} />
+                                <div>No alerts recorded yet</div>
+                            </div>
+                        ) : (
+                            history.map((item, idx) => (
+                                <div
+                                    key={idx}
+                                    className={`notif-item ${item.severity?.toLowerCase()}`}
+                                >
+                                    <div className={`notif-item-dot ${item.severity?.toLowerCase()}`} />
+                                    <div style={{ flex: 1 }}>
+                                        <div className="notif-item-title">{item.title}</div>
+                                        <div className="notif-item-reason">{item.reason?.slice(0, 90)}{item.reason?.length > 90 ? "…" : ""}</div>
+                                        <div className="notif-item-time">Received {item.receivedAt} · {item.severity}</div>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            )}
+        </>
     );
 }
 
@@ -5054,11 +5683,21 @@ function AlertsPage({
     onToggleSound,
     onToggleVoice,
     onUpdateFarmer,
+    ackVersion,
+    onAcknowledge,
+    onUnacknowledge,
 }) {
     const [selectedFilter, setSelectedFilter] = useState("ALL");
     const [isEditingContact, setIsEditingContact] = useState(false);
     const [nameInput, setNameInput] = useState(farmerContact?.name || "Farm Manager Silva");
     const [phoneInput, setPhoneInput] = useState(farmerContact?.phone || "+94771234567");
+
+    // 1-second countdown ticker for live snooze remaining display
+    const [, setTick] = useState(0);
+    useEffect(() => {
+        const timer = setInterval(() => setTick((t) => t + 1), 1000);
+        return () => clearInterval(timer);
+    }, []);
 
     const handleSaveContact = (e) => {
         e?.preventDefault();
@@ -5376,6 +6015,9 @@ function AlertsPage({
                 >
                     {filteredAlerts.map((alert, index) => {
                         const style = getSeverityStyles(alert.severity);
+                        const alertKey = getAlertKey(alert);
+                        const isAcked = isAlertAcknowledged(alertKey);
+                        const remainingSec = isAcked ? getAlertRemainingSnoozeSeconds(alertKey) : 0;
 
                         return (
                             <div
@@ -5383,6 +6025,7 @@ function AlertsPage({
                                 className="alert-card"
                                 style={{
                                     borderLeft: style.borderLeft,
+                                    opacity: isAcked ? 0.75 : 1,
                                 }}
                             >
                                 <div
@@ -5420,6 +6063,23 @@ function AlertsPage({
                                                     className={`alert-status-badge alert-status-${alert.status.toLowerCase()}`}
                                                 >
                                                     {alert.status}
+                                                </span>
+                                            )}
+
+                                            {isAcked && (
+                                                <span
+                                                    style={{
+                                                        fontSize: "9.5px",
+                                                        color: "#62c87b",
+                                                        background: "rgba(98, 200, 123, 0.15)",
+                                                        border: "1px solid rgba(98, 200, 123, 0.35)",
+                                                        padding: "2px 7px",
+                                                        borderRadius: "4px",
+                                                        fontFamily: '"JetBrains Mono", monospace',
+                                                        fontWeight: 700,
+                                                    }}
+                                                >
+                                                    ✓ ACKNOWLEDGED ({Math.floor(remainingSec / 60)}m {remainingSec % 60}s snooze)
                                                 </span>
                                             )}
                                         </div>
@@ -5533,12 +6193,61 @@ function AlertsPage({
                                     <button
                                         type="button"
                                         className="alert-act-btn alert-act-speak"
-                                        onClick={() => speakAlertVoice(alert, farmerContact?.name)}
+                                        onClick={() => {
+                                            unlockAudio();
+                                            playAlertSound(alert.severity);
+                                        }}
+                                        title="Play alarm sound for this alert"
+                                    >
+                                        <Bell size={11} />
+                                        <span>Play Sound</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="alert-act-btn alert-act-speak"
+                                        onClick={() => {
+                                            unlockAudio();
+                                            speakAlertVoice(alert, farmerContact?.name);
+                                        }}
                                         title="Speak alert audio with voice"
                                     >
                                         <Volume2 size={11} />
                                         <span>Speak Alert</span>
                                     </button>
+                                    {isAcked ? (
+                                        <button
+                                            type="button"
+                                            className="alert-act-btn"
+                                            style={{
+                                                background: "rgba(255, 255, 255, 0.05)",
+                                                border: "1px solid rgba(255, 255, 255, 0.15)",
+                                                color: "#8a9e93",
+                                            }}
+                                            onClick={() => onUnacknowledge?.(alert)}
+                                            title="Cancel 5-minute snooze and resume alert reminders immediately"
+                                        >
+                                            <X size={11} />
+                                            <span>Cancel Snooze</span>
+                                        </button>
+                                    ) : (
+                                        (alert.severity === "CRITICAL" || alert.severity === "WARNING") && (
+                                            <button
+                                                type="button"
+                                                className="alert-act-btn"
+                                                style={{
+                                                    background: "rgba(98, 200, 123, 0.22)",
+                                                    border: "1px solid #62c87b",
+                                                    color: "#95e0a6",
+                                                    fontWeight: 700,
+                                                }}
+                                                onClick={() => onAcknowledge?.(alert)}
+                                                title="Acknowledge alert and snooze notifications for 5 minutes"
+                                            >
+                                                <Check size={11} />
+                                                <span>Acknowledge (5m)</span>
+                                            </button>
+                                        )
+                                    )}
                                 </div>
                             </div>
                         );
